@@ -50,14 +50,14 @@ if __name__ == '__main__':
     if "--networkx" in sys.argv:
         G = networkx.DiGraph()
         for index, row in node_df.iterrows():
-            G.add_node(row["id"], label=row["title"])
+            G.add_node(row["id"], label=row["title"], color='blue' if not row["is_revoked"] else 'red')
         for index, row in edge_df.iterrows():
             G.add_edge(row["from"], row["to"], color='black' if row["sig_type"] != "Revoke" else 'red', label=row["sig_type"] if row["sig_type"] != "Default" else "")
 
         plt.figure()
 
         pos = networkx.arf_layout(G)
-        networkx.draw(G, pos, edge_color=networkx.get_edge_attributes(G, 'color').values())
+        networkx.draw(G, pos, edge_color=networkx.get_edge_attributes(G, 'color').values(), node_color=networkx.get_node_attributes(G, 'color').values())
         node_labels = networkx.get_node_attributes(G, 'label')
         networkx.draw_networkx_labels(G, pos, labels=node_labels)
         edge_labels = networkx.get_edge_attributes(G, 'label')

@@ -1,4 +1,4 @@
-use crate::{KEY_SET_MAP, SIMPLE_OUTPUT};
+use crate::{get_pgp_uid_by_node_uid, SIMPLE_OUTPUT};
 use num_enum::{FromPrimitive, IntoPrimitive};
 use sequoia_openpgp::types::SignatureType;
 use serde::Serialize;
@@ -92,15 +92,7 @@ pub(crate) struct GraphNodeUid<'a> {
 
 impl Display for GraphNodeUid<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let key = KEY_SET_MAP
-            .get()
-            .map(|v| {
-                v.get(&self.key_id.to_string())
-                    .map(|v| v.user_ids.get(&self.uid.to_string()))
-            })
-            .flatten()
-            .flatten();
-        match key {
+        match get_pgp_uid_by_node_uid(self) {
             None => simple_output(self, f, &self.key_id.to_string()),
             Some(v) => simple_output(v, f, &v.uid.to_string()),
         }

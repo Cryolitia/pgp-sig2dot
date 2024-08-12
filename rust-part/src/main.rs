@@ -17,7 +17,7 @@ use sequoia_openpgp::{Cert, Fingerprint};
 use sequoia_wot::{CertSynopsis, RevocationStatus, UserIDSynopsis};
 
 use crate::cli::Cli;
-use crate::structure::{GraphNodeUid, OpenPgpKey, OpenPgpSig, OpenPgpUid};
+use crate::structure::{GraphNodeUid, OpenPgpKey, OpenPgpSig, OpenPgpUid, SigType};
 
 mod cli;
 mod structure;
@@ -240,7 +240,14 @@ async fn main() {
             })
         });
 
-        let content = format!("{}", Dot::new(&graph));
+        let dot = Dot::with_attr_getters(&graph, &[], &|_, v|
+            (if v.2.sig_type == SigType::Revoke { "color=red" } else { "" }).to_string(),&|_, v| {
+            get_pgp_uid_by_node_uid(v.1).map(|v| {
+                if v.is_revoked {"color=red"} else {""}
+            }).unwrap_or("").to_string()
+        }
+        );
+        let content = format!("{}", dot);
         println!("{}", content);
 
         Ok(())
@@ -252,4 +259,15 @@ async fn main() {
             },
             |_| exit(0),
         );
+}
+
+fn get_pgp_uid_by_node_uid<'a>(uid: &'a GraphNodeUid) -> Option<&'a OpenPgpUid> {
+    KEY_SET_MAP
+        .get()
+        .map(|v| {
+            v.get(&uid.key_id.to_string())
+                .map(|v| v.user_ids.get(&uid.uid.to_string()))
+        })
+        .flatten()
+        .flatten()
 }

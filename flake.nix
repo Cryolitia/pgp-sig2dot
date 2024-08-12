@@ -280,7 +280,7 @@
                 }:
                 python3Packages.buildPythonApplication {
                   pname = "pgp-sig2dot-python-part";
-                  version = "0.1.0";
+                  version = "unstable";
                   pyproject = true;
 
                   src = lib.cleanSource ./python-part;
