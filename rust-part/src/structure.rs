@@ -53,15 +53,15 @@ fn simple_output<T>(object: &T, f: &mut Formatter<'_>, or: &String) -> std::fmt:
 where
     T: Serialize,
 {
-    let simple_ouput = SIMPLE_OUTPUT.get().unwrap_or(&false).clone();
+    let simple_ouput = *SIMPLE_OUTPUT.get().unwrap_or(&false);
     if !simple_ouput {
-        return write!(
+        write!(
             f,
             "{}",
             serde_json::to_string(object).unwrap_or_else(|e| format!("{}", e))
-        );
+        )
     } else {
-        return write!(f, "{}", or);
+        write!(f, "{}", or)
     }
 }
 

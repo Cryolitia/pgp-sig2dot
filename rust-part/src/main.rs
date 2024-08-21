@@ -86,20 +86,20 @@ async fn main() {
         });
 
         fingerprints.iter().for_each(|fingerprint| {
-            keyserver.get().map(|keyserver| {
+            if let Some(keyserver) = keyserver.get() {
                 info!("Fetching key: {}", fingerprint);
                 futures::executor::block_on(async {
                     keyserver.get(fingerprint).await.map_or_else(|e| {
                         warn!("{}",e.to_string());
                     }, |v| {
-                        v.get(0).inspect(|v| {
+                        v.first().inspect(|v| {
                             v.as_ref().ok().inspect(|v| {
                                 certs.insert(fingerprint.clone(), (*v).clone());
                             });
                         });
                     });
                 });
-            });
+            }
         });
 
         trace!("{:?}", certs);
@@ -114,7 +114,7 @@ async fn main() {
                         |cert| {
                             let cert_synopsis: CertSynopsis = cert.clone().into();
                             let id = Arc::new(cert_synopsis.keyid().to_string());
-                            let primary_id = Arc::new(cert.primary_userid().map(|v| v.userid().to_string()).unwrap_or(String::new()));
+                            let primary_id = Arc::new(cert.primary_userid().map(|v| v.userid().to_string()).unwrap_or_default());
                             Some((
                                 id.clone(),
                                 OpenPgpKey {
@@ -179,10 +179,10 @@ async fn main() {
                                                             }, |v| v.to_string()),
                                                             uid: sig.signers_user_id().map_or_else(|| {
                                                                 "".to_string()
-                                                            }, |v| String::from_utf8(Vec::from(v)).map_or_else(|e| {
+                                                            }, |v| String::from_utf8(Vec::from(v)).unwrap_or_else(|e| {
                                                                 warn!("Invalid Signer User ID: {}", e);
                                                                 "".to_string()
-                                                            }, |v| v)),
+                                                            })),
                                                             trust_level: sig.trust_signature().unwrap_or((0, 0)).0,
                                                             trust_value: sig.trust_signature().unwrap_or((0, 0)).1.into(),
                                                             sig_type: sig.typ().into(),
@@ -208,7 +208,7 @@ async fn main() {
 
         debug!(
             "{}",
-            serde_json::to_string(&key_set).map_or_else(|e| e.to_string(), |v| v)
+            serde_json::to_string(&key_set).unwrap_or_else(|e| e.to_string())
         );
 
         let mut graph: DiGraphMap<GraphNodeUid, &OpenPgpSig> = DiGraphMap::new();
@@ -264,10 +264,9 @@ async fn main() {
 fn get_pgp_uid_by_node_uid<'a>(uid: &'a GraphNodeUid) -> Option<&'a OpenPgpUid> {
     KEY_SET_MAP
         .get()
-        .map(|v| {
+        .and_then(|v| {
             v.get(&uid.key_id.to_string())
                 .map(|v| v.user_ids.get(&uid.uid.to_string()))
         })
-        .flatten()
         .flatten()
 }
