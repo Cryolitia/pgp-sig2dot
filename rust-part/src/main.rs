@@ -1,11 +1,12 @@
 use std::collections::{HashMap, HashSet};
 use std::default::Default;
+use std::fs::create_dir_all;
 use std::io::{Error, Read};
 use std::process::exit;
 use std::sync::{Arc, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use log::{debug, error, info, trace, warn};
 use petgraph::dot::Dot;
 use petgraph::graphmap::DiGraphMap;
@@ -16,7 +17,7 @@ use sequoia_openpgp::policy::StandardPolicy;
 use sequoia_openpgp::{Cert, Fingerprint};
 use sequoia_wot::{CertSynopsis, RevocationStatus, UserIDSynopsis};
 
-use crate::cli::Cli;
+use crate::cli::{Cli, Commands, GenCommand};
 use crate::structure::{GraphNodeUid, OpenPgpKey, OpenPgpSig, OpenPgpUid, SigType};
 
 mod cli;
@@ -31,10 +32,39 @@ async fn main() {
     let policy = StandardPolicy::new();
     let log_level = args.verbose.log_level_filter();
     env_logger::Builder::new().filter_level(log_level).init();
+    debug!("Cli args: {:?}", args);
+
+    if let Some(command) = args.command {
+        match command {
+            Commands::Gen { gen_command } => {
+                (|| -> Result<(), String> {
+                    let cmd = Cli::command();
+                    match gen_command {
+                        GenCommand::Man { path } => {
+                            let out_dir = path.to_path_buf();
+                            debug!("man: generate to{:?}", out_dir);
+                            create_dir_all(&out_dir).map_err(|e| e.to_string())?;
+                            clap_mangen::generate_to(Cli::command(), out_dir)
+                                .map_err(|e| e.to_string())?;
+                        }
+                        GenCommand::Complete { args, mut output } => {
+                            let name = cmd.get_display_name().unwrap_or_else(|| cmd.get_name());
+                            clap_complete::generate(args, &mut Cli::command(), name, &mut output);
+                        }
+                    }
+                    Ok(())
+                })()
+                .err()
+                .inspect(|e| {
+                    error!("{}", e);
+                    exit(1);
+                });
+                exit(0);
+            }
+        }
+    }
 
     (|| -> Result<(), String> {
-        debug!("Cli args: {:?}", args);
-
         let keyserver: OnceLock<KeyServer> = OnceLock::new();
 
         keyserver.set(KeyServer::new(&args.keyserver).map_err(|e| e.to_string())?).err();
@@ -126,11 +156,11 @@ async fn main() {
                                         .map_or_else(|| false, |v| v < SystemTime::now()),
                                     user_ids: cert
                                         .userids()
-                                        .filter_map(|user_id| {
+                                        .map(|user_id| {
                                             let user_id_synopsis: UserIDSynopsis =
                                                 user_id.clone().into();
                                             let uid = Arc::new(user_id.to_string());
-                                            Some((uid.clone(), OpenPgpUid {
+                                            (uid.clone(), OpenPgpUid {
                                                 key_id: id.clone(),
                                                 uid: uid.clone(),
                                                 name: user_id.name2().map_or_else(
@@ -193,7 +223,7 @@ async fn main() {
                                                 is_revoked: user_id_synopsis.revocation_status()
                                                     != RevocationStatus::NotAsFarAsWeKnow,
                                                 is_primary: user_id.userid().to_string() == *primary_id,
-                                            }))
+                                            })
                                         })
                                         .collect(),
                                     primary_user_id: primary_id.clone(),
@@ -266,7 +296,7 @@ fn get_pgp_uid_by_node_uid<'a>(uid: &'a GraphNodeUid) -> Option<&'a OpenPgpUid> 
         .get()
         .and_then(|v| {
             v.get(&uid.key_id.to_string())
-                .map(|v| v.user_ids.get(&uid.uid.to_string()))
+                .map(|v| v.user_ids.get(&<&str as Into<String>>::into(uid.uid)))
         })
         .flatten()
 }

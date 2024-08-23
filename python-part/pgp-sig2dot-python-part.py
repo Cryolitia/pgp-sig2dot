@@ -14,6 +14,7 @@ import sys
 if __name__ == '__main__':
     dot_string = sys.stdin.read()
     graph = pydot.graph_from_dot_data(dot_string)[0]
+    plt.rcParams['font.family'] = ['DejaVu Sans', 'Source Han Sans']
 
     node_data = []
     for node in graph.get_nodes():

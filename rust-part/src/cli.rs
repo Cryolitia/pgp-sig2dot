@@ -1,6 +1,7 @@
-use clap::Parser;
+use clap::{Parser, Subcommand};
+use clap_complete::Shell;
 use clap_verbosity_flag::Verbosity;
-use clio::Input;
+use clio::{ClioPath, Input, Output};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -28,11 +29,38 @@ pub struct Cli {
     #[arg(global = true, long)]
     pub(crate) online: bool,
 
-    /// Keep the output simple instead of JSON object
+    /// Keep the output simple instead of JSON
     #[arg(global = true, long)]
     pub(crate) simple: bool,
 
     /// Key server
     #[arg(global = true, long, default_value = "hkps://keyserver.ubuntu.com")]
     pub(crate) keyserver: String,
+
+    #[command(subcommand)]
+    pub(crate) command: Option<Commands>,
+}
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum Commands {
+    #[command(about = "Generate manual or shell auto complete file")]
+    Gen {
+        #[command(subcommand)]
+        gen_command: GenCommand,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum GenCommand {
+    #[command(about = "Generate manual file")]
+    Man {
+        #[arg(help = "Output Path", long)]
+        path: ClioPath,
+    },
+    #[command(about = "Generate shell auto complete file")]
+    Complete {
+        args: Shell,
+        #[arg(help = "Output Path", long, default_value = "-")]
+        output: Output,
+    },
 }

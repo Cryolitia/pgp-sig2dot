@@ -131,13 +131,14 @@
             let
               inherit (self) callPackage;
             in
-            rec {
+            {
               pgp-sig2dot-rust-part = callPackage (
                 {
                   lib,
                   stdenv,
                   rust-bin,
                   makeRustPlatform,
+                  installShellFiles,
                   pkg-config,
                   curl,
                   openssl,
@@ -163,6 +164,7 @@
                   nativeBuildInputs = [
                     pkg-config
                     rustPlatform.bindgenHook
+                    installShellFiles
                   ];
 
                   buildInputs = [
@@ -171,12 +173,15 @@
                     sqlite
                   ] ++ lib.optionals stdenv.isDarwin [ curl ];
 
-                  postInstall = ''
-                    #$ out/bin/gpd-controls gen --path $out/share/man/man1/ man
-                    #$ out/bin/gpd-controls gen --path $out/share/zsh/site-functions/ complete zsh
-                    # $out/bin/gpd-controls gen --path $out/share/bash-completion/completions/ complete bash
-                    # $out/bin/gpd-controls gen --path $out/share/fish/vendor_completions.d/ complete fish
-                    # TODO: elvish https://github.com/elves/elvish/issues/1004
+                  postInstall = lib.optionalString (stdenv.buildPlatform.canExecute stdenv.hostPlatform) ''
+                    installShellCompletion --cmd pgp-sig2dot \
+                      --bash <($out/bin/pgp-sig2dot gen complete bash) \
+                      --fish <($out/bin/pgp-sig2dot gen complete fish) \
+                      --zsh <($out/bin/pgp-sig2dot gen complete zsh)
+
+                    mkdir -p manpage
+                    $out/bin/pgp-sig2dot gen man --path manpage
+                    installManPage manpage/*
                   '';
 
                   meta =
@@ -295,11 +300,7 @@
                     pydot
                   ];
 
-                  meta =
-                    legacy-meta
-                    // (with lib; {
-                      mainProgram = "main.py";
-                    });
+                  meta = legacy-meta;
                 }
               ) { python3Packages = pkgs.python3Packages; };
 
@@ -311,8 +312,9 @@
                 }:
                 writeShellApplication {
                   name = "pgp-sig2dot-jaal";
+                  runtimeInputs = [ pgp-sig2dot-rust-part pgp-sig2dot-rust-part ];
                   text = ''
-                    ${pgp-sig2dot-rust-part}/bin/pgp-sig2dot "$@" | ${pgp-sig2dot-python-part}/bin/main.py --jaal
+                    ${pgp-sig2dot-rust-part}/bin/pgp-sig2dot "$@" | ${pgp-sig2dot-python-part}/bin/pgp-sig2dot-python-part.py --jaal
                   '';
                 }
               ) { };
@@ -324,9 +326,10 @@
                   pgp-sig2dot-rust-part,
                 }:
                 writeShellApplication {
-                  name = "pgp-sig2dot-jaal";
+                  name = "pgp-sig2dot-networkx";
+                  runtimeInputs = [ pgp-sig2dot-rust-part pgp-sig2dot-rust-part ];
                   text = ''
-                    ${pgp-sig2dot-rust-part}/bin/pgp-sig2dot "$@" | ${pgp-sig2dot-python-part}/bin/main.py --networkx
+                    ${pgp-sig2dot-rust-part}/bin/pgp-sig2dot "$@" | ${pgp-sig2dot-python-part}/bin/pgp-sig2dot-python-part.py --networkx
                   '';
                 }
               ) { };
@@ -338,12 +341,34 @@
                   graphviz-nox,
                 }:
                 writeShellApplication {
-                  name = "pgp-sig2dot-graphiz";
-                  runtimeInputs = [ graphviz-nox ];
+                  name = "pgp-sig2dot-graphviz";
+                  runtimeInputs = [ pgp-sig2dot-rust-part graphviz-nox ];
                   text = ''
-                    ${pgp-sig2dot-rust-part}/bin/pgp-sig2dot --simple "$@" | dot -Tsvg -Ksfdp
+                    ${pgp-sig2dot-rust-part}/bin/pgp-sig2dot --simple "$@" | ${graphviz-nox}/bin/dot -Tsvg -Ksfdp
                   '';
                 }
+              ) { };
+
+              pgp-sig2dot = callPackage (
+                {
+                  runCommand,
+                  pgp-sig2dot-rust-part,
+                  pgp-sig2dot-python-part,
+                  pgp-sig2dot-jaal,
+                  pgp-sig2dot-networkx,
+                  pgp-sig2dot-graphviz,
+                }:
+                runCommand "pgp-sig2dot" { } ''
+                  mkdir -p $out/bin
+
+                  ln -s ${pgp-sig2dot-rust-part}/bin/pgp-sig2dot $out/bin/pgp-sig2dot
+                  ln -s ${pgp-sig2dot-python-part}/bin/pgp-sig2dot-python-part.py $out/bin/pgp-sig2dot-python-part
+                  ln -s ${pgp-sig2dot-jaal}/bin/pgp-sig2dot-jaal $out/bin/pgp-sig2dot-jaal
+                  ln -s ${pgp-sig2dot-networkx}/bin/pgp-sig2dot-networkx $out/bin/pgp-sig2dot-networkx
+                  ln -s ${pgp-sig2dot-graphviz}/bin/pgp-sig2dot-graphviz $out/bin/pgp-sig2dot-graphviz
+
+                  ln -s ${pgp-sig2dot-rust-part}/share $out/share
+                ''
               ) { };
             }
           )

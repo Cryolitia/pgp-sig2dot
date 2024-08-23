@@ -26,5 +26,5 @@ setup(
         "pydot",
     ],
     # Executables
-    scripts=["main.py"],
+    scripts=["pgp-sig2dot-python-part.py"],
 )
