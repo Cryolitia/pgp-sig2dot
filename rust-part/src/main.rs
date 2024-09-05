@@ -24,8 +24,9 @@ mod cert;
 mod cli;
 mod structure;
 
+static CLI_ARGS: OnceLock<Cli> = OnceLock::new();
 static KEY_SET_MAP: OnceLock<HashMap<Arc<String>, OpenPgpKey>> = OnceLock::new();
-static SIMPLE_OUTPUT: OnceLock<bool> = OnceLock::new();
+static GOSSIP_LAYER_MAP: OnceLock<HashMap<Arc<String>, u8>> = OnceLock::new();
 
 #[tokio::main]
 async fn main() {
@@ -68,7 +69,7 @@ async fn main() {
         let keyserver: OnceLock<KeyServer> = OnceLock::new();
 
         keyserver.set(KeyServer::new(&args.keyserver)?).err();
-        SIMPLE_OUTPUT.set(args.simple).unwrap();
+        CLI_ARGS.set(args.clone()).unwrap();
 
         if args.gossip == Some(0) && args.online {
             return Err(anyhow!("Online mode is not allowed with depth limit 0"));
@@ -115,18 +116,22 @@ async fn main() {
             warn!("{}", e);
         });
 
-        let args_fingerprints: Vec<Fingerprint> = args.fingerprint.map_or(Default::default(),|v| {
+        let args_fingerprints: Vec<Fingerprint> = args.fingerprint.map_or(Default::default(), |v| {
             v.into_iter().filter_map(|v| {
                 Fingerprint::from_hex(v.as_str()).map_or_else(|e| {
                     warn!("Invalid Fingerprint: {}", e);
                     None
                 }, |v| {
-                   Some(v)
+                    Some(v)
                 })
             }).collect()
         });
 
         fingerprints.extend(args_fingerprints.iter().cloned());
+
+        if args.gossip.is_some() && args.simple {
+            return Err(anyhow!("Simple mode is not allowed with gossip"));
+        }
 
         if args.online {
             fingerprints.iter().for_each(|fingerprint| {
@@ -140,8 +145,9 @@ async fn main() {
         if args.online && !args_fingerprints.is_empty() && args.gossip.is_some() {
             let gossip = args.gossip.unwrap_or(0);
             if gossip > 0 {
-                cert::fetch_cert_from_keyserver_once_lock_recursive(&keyserver, &args_fingerprints, gossip)
-                    .into_iter()
+                let mut result: HashMap<Fingerprint, Cert> = Default::default();
+                cert::fetch_cert_from_keyserver_once_lock_recursive(&keyserver, &args_fingerprints.iter().cloned().collect(), gossip, &mut result);
+                result.into_iter()
                     .for_each(|(fingerprint, cert)| {
                         certs.insert(fingerprint, cert);
                     });
@@ -152,15 +158,15 @@ async fn main() {
 
         let key_set: HashMap<Arc<String>, OpenPgpKey> = certs
             .iter()
-            .filter(|cert| {
+            .filter(|(fingerprint, _)| {
                 if args.gossip.is_none() && !args_import_is_none && !args_fingerprints.is_empty() {
-                    args_fingerprints.contains(cert.0)
+                    args_fingerprints.contains(fingerprint)
                 } else {
                     true
                 }
             })
-            .filter_map(|cert| {
-                cert.1.with_policy(&policy, SystemTime::now())
+            .filter_map(|(_, cert)| {
+                cert.with_policy(&policy, SystemTime::now())
                     .map_err(|e| error!("{}", e))
                     .map_or_else(
                         |_| None,
@@ -259,6 +265,49 @@ async fn main() {
 
         KEY_SET_MAP.set(key_set.clone()).unwrap();
 
+        if args.gossip.is_some() {
+            let mut gossip_layers: HashMap<u8, HashSet<Arc<String>>> = Default::default();
+            let mut gossip_layer_map: HashMap<Arc<String>, u8> = Default::default();
+
+            let mut layer: HashSet<Arc<String>> = Default::default();
+            args_fingerprints.iter().for_each(|fingerprint| {
+                let fingerprint: Arc<String> = fingerprint.to_string().into();
+                layer.insert(fingerprint.clone());
+                gossip_layer_map.insert(fingerprint, 0);
+            });
+            gossip_layers.insert(0, layer);
+
+            let mut i: u8 = 0;
+
+            while let Some(last_layer) = gossip_layers.get(&i) {
+                if last_layer.is_empty() {
+                    break;
+                }
+                i += 1;
+
+                let mut layer: HashSet<Arc<String>> = Default::default();
+                last_layer.iter().for_each(|fingerprint| {
+                    key_set.get(fingerprint).inspect(|cert| {
+                        cert.user_ids.iter().for_each(|(_, pgp_uid)| {
+                            pgp_uid.sig_vec.iter().for_each(|sig| {
+                                if !gossip_layer_map.contains_key(&sig.fingerprint) {
+                                    layer.insert(sig.fingerprint.clone().into());
+                                    gossip_layer_map.insert(sig.fingerprint.clone().into(), i);
+                                }
+                            })
+                        })
+                    });
+                });
+
+                if layer.is_empty() {
+                    break;
+                }
+                gossip_layers.insert(i, layer);
+            }
+
+            GOSSIP_LAYER_MAP.set(gossip_layer_map).unwrap();
+        }
+
         debug!(
             "{}",
             serde_json::to_string(&key_set).unwrap_or_else(|e| e.to_string())
@@ -266,36 +315,36 @@ async fn main() {
 
         let mut graph: DiGraphMap<GraphNodeUid, &OpenPgpSig> = DiGraphMap::new();
 
-        key_set.iter().for_each(|pair| {
-            pair.1.user_ids.iter().for_each(|pair| {
-                if !pair.1.is_primary && args.show_primary_uid_only {
+        key_set.iter().for_each(|(_, pgp_key)| {
+            pgp_key.user_ids.iter().for_each(|(_, pgp_uid)| {
+                if !pgp_uid.is_primary && args.show_primary_uid_only {
                     return;
                 }
-                graph.add_node(pair.1.into());
+                graph.add_node(pgp_uid.into());
             });
         });
 
-        key_set.iter().for_each(|pair| {
-            pair.1.user_ids.iter().for_each(|uid| {
-                if !uid.1.is_primary && args.show_primary_uid_only {
+        key_set.iter().for_each(|(_, pgp_key)| {
+            pgp_key.user_ids.iter().for_each(|(_, pgp_uid)| {
+                if !pgp_uid.is_primary && args.show_primary_uid_only {
                     return;
                 }
-                uid.1.sig_vec.iter().for_each(|sig| {
+                pgp_uid.sig_vec.iter().for_each(|sig| {
                     key_set.get(&sig.fingerprint).inspect(|key_id| {
                         key_id.user_ids.get(&key_id.primary_user_id).inspect(|sig_uid| {
-                            if !args.show_self_sigs && sig_uid.uid == uid.1.uid {
+                            if !args.show_self_sigs && sig_uid.uid == pgp_uid.uid {
                                 return;
                             }
-                            graph.add_edge(sig_uid.into(), uid.1.into(), sig);
+                            graph.add_edge(sig_uid.into(), pgp_uid.into(), sig);
                         });
                     });
                 });
             })
         });
 
-        let dot = Dot::with_attr_getters(&graph, &[], &|_, v|
-            (if v.2.sig_type == SigType::Revoke { "color=red" } else { "" }).to_string(), &|_, v| {
-            get_pgp_uid_by_node_uid(v.1).map(|v| {
+        let dot = Dot::with_attr_getters(&graph, &[], &|_, (_, _, sig)|
+            (if sig.sig_type == SigType::Revoke { "color=red" } else { "" }).to_string(), &|_, (_, uid)| {
+            get_pgp_uid_by_node_uid(uid).map(|v| {
                 if v.is_revoked { "color=red" } else { "" }
             }).unwrap_or("").to_string()
         },

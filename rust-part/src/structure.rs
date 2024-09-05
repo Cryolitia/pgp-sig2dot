@@ -1,5 +1,5 @@
-use crate::cert::get_pgp_uid_by_node_uid;
-use crate::SIMPLE_OUTPUT;
+use crate::cert::{complex_output, get_pgp_uid_by_node_uid, simple_output};
+use crate::GOSSIP_LAYER_MAP;
 use num_enum::{FromPrimitive, IntoPrimitive};
 use sequoia_openpgp::types::SignatureType;
 use serde::Serialize;
@@ -50,19 +50,38 @@ pub(crate) struct OpenPgpUid {
     pub(crate) is_primary: bool,
 }
 
-fn simple_output<T>(object: &T, f: &mut Formatter<'_>, or: &String) -> std::fmt::Result
-where
-    T: Serialize,
-{
-    let simple_output = *SIMPLE_OUTPUT.get().unwrap_or(&false);
-    if !simple_output {
-        write!(
-            f,
-            "{}",
-            serde_json::to_string(object).unwrap_or_else(|e| format!("{}", e))
-        )
-    } else {
-        write!(f, "{}", or)
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct OpenPgpUidLayer {
+    pub(crate) fingerprint: Arc<String>,
+    pub(crate) uid: Arc<String>,
+    pub(crate) name: String,
+    pub(crate) email: String,
+    pub(crate) comment: String,
+    pub(crate) is_revoked: bool,
+    pub(crate) is_primary: bool,
+    pub(crate) layer: i16,
+}
+
+impl From<&OpenPgpUid> for OpenPgpUidLayer {
+    fn from(value: &OpenPgpUid) -> Self {
+        let layer: i16 = match GOSSIP_LAYER_MAP
+            .get()
+            .and_then(|v| v.get(&value.fingerprint))
+        {
+            None => -1,
+            Some(v) => (*v).into(),
+        };
+
+        OpenPgpUidLayer {
+            fingerprint: value.fingerprint.clone(),
+            uid: value.uid.clone(),
+            name: value.name.clone(),
+            email: value.email.clone(),
+            comment: value.comment.clone(),
+            is_revoked: value.is_revoked,
+            is_primary: value.is_primary,
+            layer,
+        }
     }
 }
 
@@ -95,7 +114,7 @@ impl Display for GraphNodeUid<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match get_pgp_uid_by_node_uid(self) {
             None => simple_output(self, f, &self.fingerprint.to_string()),
-            Some(v) => simple_output(v, f, &v.uid.to_string()),
+            Some(v) => complex_output(v, f, &v.uid.to_string()),
         }
     }
 }

@@ -3,7 +3,7 @@ use clap_complete::Shell;
 use clap_verbosity_flag::Verbosity;
 use clio::{ClioPath, Input, Output};
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 #[command(author, version, about, long_about = None)]
 pub struct Cli {
     #[command(flatten)]
@@ -46,7 +46,7 @@ pub struct Cli {
     pub(crate) command: Option<Commands>,
 }
 
-#[derive(Subcommand, Debug)]
+#[derive(Subcommand, Debug, Clone)]
 pub(crate) enum Commands {
     #[command(about = "Generate manual or shell auto complete file")]
     Gen {
@@ -55,7 +55,7 @@ pub(crate) enum Commands {
     },
 }
 
-#[derive(Subcommand, Debug)]
+#[derive(Subcommand, Debug, Clone)]
 pub(crate) enum GenCommand {
     #[command(about = "Generate manual file")]
     Man {
