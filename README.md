@@ -5,7 +5,7 @@ OpenPGP sign party tool —— Visualize the Web of Trust
 This tool contains two part:
 
 1. The rust part parse OpenPGP data, fetching keys from keyserver, and output the DOT of the web of trust.
-2. The python part parse DOT input, and call [jaal](https://github.com/imohitmayank/jaal) or [networkx](https://github.com/networkx/networkx) or [graphviz](https://graphviz.org/) as a visualization backend.
+2. The second part parse DOT input, and call [jaal](https://github.com/imohitmayank/jaal) or [networkx](https://github.com/networkx/networkx) or [graphviz](https://graphviz.org/) as a visualization backend.
 
 ## Usage Example
 

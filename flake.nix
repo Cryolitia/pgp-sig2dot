@@ -344,7 +344,11 @@
                   name = "pgp-sig2dot-graphviz";
                   runtimeInputs = [ pgp-sig2dot-rust-part graphviz-nox ];
                   text = ''
-                    ${pgp-sig2dot-rust-part}/bin/pgp-sig2dot --simple "$@" | ${graphviz-nox}/bin/dot -Tsvg -Ksfdp
+                    if grep -q gossip <<<"$@"; then
+                      ${pgp-sig2dot-rust-part}/bin/pgp-sig2dot --simple "$@" | ${graphviz-nox}/bin/dot -Goverlap=false -Tsvg -Ktwopi
+                    else
+                      ${pgp-sig2dot-rust-part}/bin/pgp-sig2dot --simple "$@" | ${graphviz-nox}/bin/dot -Goverlap=false -Tsvg -Ksfdp
+                    fi
                   '';
                 }
               ) { };

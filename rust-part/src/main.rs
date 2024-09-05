@@ -129,10 +129,6 @@ async fn main() {
 
         fingerprints.extend(args_fingerprints.iter().cloned());
 
-        if args.gossip.is_some() && args.simple {
-            return Err(anyhow!("Simple mode is not allowed with gossip"));
-        }
-
         if args.online {
             fingerprints.iter().for_each(|fingerprint| {
                 match cert::fetch_cert_from_keyserver_once_lock(&keyserver, fingerprint) {
@@ -355,13 +351,24 @@ async fn main() {
             })
         });
 
+        let binding = &|_, (_, uid)| {
+            let mut attr = get_pgp_uid_by_node_uid(uid).map(|v| {
+                if v.is_revoked { " color = red " } else { "" }
+            }).unwrap_or("").to_string();
+            if args.gossip.is_some() {
+                if let Some(map) = GOSSIP_LAYER_MAP.get() {
+                    if let Some(layer) = map.get(&uid.fingerprint.to_string()) {
+                        if *layer == 0 {
+                            attr += " root = true ";
+                        }
+                    }
+                }
+            }
+            attr
+        };
+
         let dot = Dot::with_attr_getters(&graph, &[], &|_, (_, _, sig)|
-            (if sig.sig_type == SigType::Revoke { "color=red" } else { "" }).to_string(), &|_, (_, uid)| {
-            get_pgp_uid_by_node_uid(uid).map(|v| {
-                if v.is_revoked { "color=red" } else { "" }
-            }).unwrap_or("").to_string()
-        },
-        );
+            (if sig.sig_type == SigType::Revoke { " color = red " } else { "" }).to_string(), binding);
         let content = format!("{}", dot);
         println!("{}", content);
 
