@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 
 from datetime import datetime
-import getopt
 from jaal import Jaal
 from jaal.datasets import load_got
 import json
@@ -16,6 +15,9 @@ if __name__ == '__main__':
     graph = pydot.graph_from_dot_data(dot_string)[0]
     plt.rcParams['font.family'] = ['DejaVu Sans', 'Source Han Sans']
 
+    gossip = False
+    max_layer = 0
+
     node_data = []
     for node in graph.get_nodes():
         node_dict = {}
@@ -28,6 +30,12 @@ if __name__ == '__main__':
         node_dict["comment"] = label["comment"]
         node_dict["is_revoked"] = label["is_revoked"]
         node_dict["is_primary"] = label["is_primary"]
+
+        if "layer" in label:
+            layer = int(label["layer"])
+            node_dict["layer"] = layer
+            max_layer = max(max_layer, layer)
+            gossip = True
 
         node_data.append(node_dict)
     node_df = pandas.DataFrame(node_data)
@@ -57,7 +65,14 @@ if __name__ == '__main__':
 
         plt.figure()
 
-        pos = networkx.arf_layout(G)
+        if gossip:
+            list=[]
+            for i in range(max_layer + 1):
+                list.append([node["id"] for index, node in node_df[node_df["layer"] == i].iterrows()])
+            pos = networkx.shell_layout(G, list)
+        else:
+            pos = networkx.arf_layout(G)
+
         networkx.draw(G, pos, edge_color=networkx.get_edge_attributes(G, 'color').values(), node_color=networkx.get_node_attributes(G, 'color').values())
         node_labels = networkx.get_node_attributes(G, 'label')
         networkx.draw_networkx_labels(G, pos, labels=node_labels)

@@ -55,11 +55,11 @@ async fn main() {
                     }
                     Ok(())
                 })()
-                .err()
-                .inspect(|e| {
-                    error!("{:#}", e);
-                    exit(1);
-                });
+                    .err()
+                    .inspect(|e| {
+                        error!("{:#}", e);
+                        exit(1);
+                    });
                 exit(0);
             }
         }
@@ -156,7 +156,7 @@ async fn main() {
 
         trace!("{:?}", certs);
 
-        let key_set: HashMap<Arc<String>, OpenPgpKey> = certs
+        let mut key_set: HashMap<Arc<String>, OpenPgpKey> = certs
             .iter()
             .filter(|(fingerprint, _)| {
                 if args.gossip.is_none() && !args_import_is_none && !args_fingerprints.is_empty() {
@@ -263,8 +263,6 @@ async fn main() {
             })
             .collect();
 
-        KEY_SET_MAP.set(key_set.clone()).unwrap();
-
         if args.gossip.is_some() {
             let mut gossip_layers: HashMap<u8, HashSet<Arc<String>>> = Default::default();
             let mut gossip_layer_map: HashMap<Arc<String>, u8> = Default::default();
@@ -305,8 +303,23 @@ async fn main() {
                 gossip_layers.insert(i, layer);
             }
 
+            key_set = key_set.into_iter().filter_map(|(fingerprint, pgp_key)| {
+                if let Some(layer) = gossip_layer_map.get(&fingerprint) {
+                    let gossip = args.gossip.unwrap_or(0);
+                    if gossip == 0 || layer <= &gossip {
+                        Some((fingerprint, pgp_key))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }).collect();
+
             GOSSIP_LAYER_MAP.set(gossip_layer_map).unwrap();
         }
+
+        KEY_SET_MAP.set(key_set.clone()).unwrap();
 
         debug!(
             "{}",
