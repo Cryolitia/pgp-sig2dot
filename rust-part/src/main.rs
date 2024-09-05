@@ -1,13 +1,9 @@
-use std::collections::{HashMap, HashSet};
-use std::default::Default;
-use std::fs::create_dir_all;
-use std::io::{Error, Read};
-use std::process::exit;
-use std::sync::{Arc, OnceLock};
-use std::time::{SystemTime, UNIX_EPOCH};
-
+use crate::cert::get_pgp_uid_by_node_uid;
+use crate::cli::{Cli, Commands, GenCommand};
+use crate::structure::{GraphNodeUid, OpenPgpKey, OpenPgpSig, OpenPgpUid, SigType};
+use anyhow::anyhow;
 use clap::{CommandFactory, Parser};
-use log::{debug, error, info, trace, warn};
+use log::{debug, error, trace, warn};
 use petgraph::dot::Dot;
 use petgraph::graphmap::DiGraphMap;
 use sequoia_net::KeyServer;
@@ -16,10 +12,15 @@ use sequoia_openpgp::parse::Parse;
 use sequoia_openpgp::policy::StandardPolicy;
 use sequoia_openpgp::{Cert, Fingerprint};
 use sequoia_wot::{CertSynopsis, RevocationStatus, UserIDSynopsis};
+use std::collections::{HashMap, HashSet};
+use std::default::Default;
+use std::fs::create_dir_all;
+use std::io::{Error, Read};
+use std::process::exit;
+use std::sync::{Arc, OnceLock};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::cli::{Cli, Commands, GenCommand};
-use crate::structure::{GraphNodeUid, OpenPgpKey, OpenPgpSig, OpenPgpUid, SigType};
-
+mod cert;
 mod cli;
 mod structure;
 
@@ -37,15 +38,14 @@ async fn main() {
     if let Some(command) = args.command {
         match command {
             Commands::Gen { gen_command } => {
-                (|| -> Result<(), String> {
+                (|| -> anyhow::Result<()> {
                     let cmd = Cli::command();
                     match gen_command {
                         GenCommand::Man { path } => {
                             let out_dir = path.to_path_buf();
                             debug!("man: generate to{:?}", out_dir);
-                            create_dir_all(&out_dir).map_err(|e| e.to_string())?;
-                            clap_mangen::generate_to(Cli::command(), out_dir)
-                                .map_err(|e| e.to_string())?;
+                            create_dir_all(&out_dir)?;
+                            clap_mangen::generate_to(Cli::command(), out_dir)?;
                         }
                         GenCommand::Complete { args, mut output } => {
                             let name = cmd.get_display_name().unwrap_or_else(|| cmd.get_name());
@@ -56,7 +56,7 @@ async fn main() {
                 })()
                 .err()
                 .inspect(|e| {
-                    error!("{}", e);
+                    error!("{:#}", e);
                     exit(1);
                 });
                 exit(0);
@@ -64,78 +64,101 @@ async fn main() {
         }
     }
 
-    (|| -> Result<(), String> {
+    (|| -> anyhow::Result<()> {
         let keyserver: OnceLock<KeyServer> = OnceLock::new();
 
-        keyserver.set(KeyServer::new(&args.keyserver).map_err(|e| e.to_string())?).err();
-        SIMPLE_OUTPUT.set(args.simple).err();
+        keyserver.set(KeyServer::new(&args.keyserver)?).err();
+        SIMPLE_OUTPUT.set(args.simple).unwrap();
+
+        if args.gossip == Some(0) && args.online {
+            return Err(anyhow!("Online mode is not allowed with depth limit 0"));
+        }
 
         if args.import.is_none() && args.fingerprint.is_none() {
-            return Err("No input found, please consider provide at least one of keyring or fingerprint.".to_string());
+            return Err(anyhow!("No input found, please consider provide at least one of keyring or fingerprint."));
+        }
+
+        if args.fingerprint.is_some() && args.import.is_none() && !args.online {
+            return Err(anyhow!("Offline mode is not allowed without keyring"));
         }
 
         let mut fingerprints: HashSet<Fingerprint> = Default::default();
         let mut certs: HashMap<Fingerprint, Cert> = Default::default();
 
+        let args_import_is_none = args.import.is_none();
+
         args.import.map_or(Ok(()),
-            |mut input| {
-                let mut keyring: Vec<u8> = Default::default();
-                input.read_to_end(&mut keyring)?;
-                CertParser::from_bytes(&keyring).map_or_else(
-                    |e| warn!("{}" ,e),
-                    |v| {
-                        v.for_each(|r| {
-                            r.map_or_else(
-                                |e| {
-                                    warn!("Invalid Cert: {}", e);
-                                },
-                                |v| {
-                                    if args.online {
-                                        fingerprints.insert(v.fingerprint());
-                                    }
-                                    certs.insert(v.fingerprint(), v);
-                                },
-                            )
-                        });
-                    },
-                );
-                Ok(())
-            },
+                           |mut input| {
+                               let mut keyring: Vec<u8> = Default::default();
+                               input.read_to_end(&mut keyring)?;
+                               CertParser::from_bytes(&keyring).map_or_else(
+                                   |e| warn!("{}" ,e),
+                                   |v| {
+                                       v.for_each(|r| {
+                                           r.map_or_else(
+                                               |e| {
+                                                   warn!("Invalid Cert: {}", e);
+                                               },
+                                               |v| {
+                                                   if args.online {
+                                                       fingerprints.insert(v.fingerprint());
+                                                   }
+                                                   certs.insert(v.fingerprint(), v);
+                                               },
+                                           )
+                                       });
+                                   },
+                               );
+                               Ok(())
+                           },
         ).err().inspect(|e: &Error| {
             warn!("{}", e);
         });
 
-        args.fingerprint.inspect(|v| {
-            v.iter().for_each(|v| {
-                Fingerprint::from_hex(v).map_or_else(|e| {
+        let args_fingerprints: Vec<Fingerprint> = args.fingerprint.map_or(Default::default(),|v| {
+            v.into_iter().filter_map(|v| {
+                Fingerprint::from_hex(v.as_str()).map_or_else(|e| {
                     warn!("Invalid Fingerprint: {}", e);
+                    None
                 }, |v| {
-                    fingerprints.insert(v);
-                });
-            })
+                   Some(v)
+                })
+            }).collect()
         });
 
-        fingerprints.iter().for_each(|fingerprint| {
-            if let Some(keyserver) = keyserver.get() {
-                info!("Fetching key: {}", fingerprint);
-                futures::executor::block_on(async {
-                    keyserver.get(fingerprint).await.map_or_else(|e| {
-                        warn!("{}",e.to_string());
-                    }, |v| {
-                        v.first().inspect(|v| {
-                            v.as_ref().ok().inspect(|v| {
-                                certs.insert(fingerprint.clone(), (*v).clone());
-                            });
-                        });
+        fingerprints.extend(args_fingerprints.iter().cloned());
+
+        if args.online {
+            fingerprints.iter().for_each(|fingerprint| {
+                match cert::fetch_cert_from_keyserver_once_lock(&keyserver, fingerprint) {
+                    Ok(cert) => { certs.insert(fingerprint.clone(), cert); }
+                    Err(e) => { warn!("{:#}", e) }
+                };
+            });
+        }
+
+        if args.online && !args_fingerprints.is_empty() && args.gossip.is_some() {
+            let gossip = args.gossip.unwrap_or(0);
+            if gossip > 0 {
+                cert::fetch_cert_from_keyserver_once_lock_recursive(&keyserver, &args_fingerprints, gossip)
+                    .into_iter()
+                    .for_each(|(fingerprint, cert)| {
+                        certs.insert(fingerprint, cert);
                     });
-                });
             }
-        });
+        }
 
         trace!("{:?}", certs);
 
         let key_set: HashMap<Arc<String>, OpenPgpKey> = certs
             .iter()
+            .filter(|cert| {
+                if args.gossip.is_none() && !args_import_is_none && !args_fingerprints.is_empty() {
+                    args_fingerprints.contains(cert.0)
+                } else {
+                    true
+                }
+            })
             .filter_map(|cert| {
                 cert.1.with_policy(&policy, SystemTime::now())
                     .map_err(|e| error!("{}", e))
@@ -143,7 +166,7 @@ async fn main() {
                         |_| None,
                         |cert| {
                             let cert_synopsis: CertSynopsis = cert.clone().into();
-                            let id = Arc::new(cert_synopsis.keyid().to_string());
+                            let id = Arc::new(cert_synopsis.fingerprint().to_string());
                             let primary_id = Arc::new(cert.primary_userid().map(|v| v.userid().to_string()).unwrap_or_default());
                             Some((
                                 id.clone(),
@@ -161,7 +184,7 @@ async fn main() {
                                                 user_id.clone().into();
                                             let uid = Arc::new(user_id.to_string());
                                             (uid.clone(), OpenPgpUid {
-                                                key_id: id.clone(),
+                                                fingerprint: id.clone(),
                                                 uid: uid.clone(),
                                                 name: user_id.name2().map_or_else(
                                                     |e| {
@@ -203,7 +226,7 @@ async fn main() {
                                                     .signatures()
                                                     .filter_map(|sig| {
                                                         Some(OpenPgpSig {
-                                                            key_id: sig.issuers().next().map_or_else(|| {
+                                                            fingerprint: sig.issuer_fingerprints().next().map_or_else(|| {
                                                                 warn!("Invalid Issuer: {:?}", sig);
                                                                 "".to_string()
                                                             }, |v| v.to_string()),
@@ -258,7 +281,7 @@ async fn main() {
                     return;
                 }
                 uid.1.sig_vec.iter().for_each(|sig| {
-                    key_set.get(&sig.key_id).inspect(|key_id| {
+                    key_set.get(&sig.fingerprint).inspect(|key_id| {
                         key_id.user_ids.get(&key_id.primary_user_id).inspect(|sig_uid| {
                             if !args.show_self_sigs && sig_uid.uid == uid.1.uid {
                                 return;
@@ -271,11 +294,11 @@ async fn main() {
         });
 
         let dot = Dot::with_attr_getters(&graph, &[], &|_, v|
-            (if v.2.sig_type == SigType::Revoke { "color=red" } else { "" }).to_string(),&|_, v| {
+            (if v.2.sig_type == SigType::Revoke { "color=red" } else { "" }).to_string(), &|_, v| {
             get_pgp_uid_by_node_uid(v.1).map(|v| {
-                if v.is_revoked {"color=red"} else {""}
+                if v.is_revoked { "color=red" } else { "" }
             }).unwrap_or("").to_string()
-        }
+        },
         );
         let content = format!("{}", dot);
         println!("{}", content);
@@ -284,19 +307,9 @@ async fn main() {
     })()
         .map_or_else(
             |e| -> i32 {
-                error!("{}", e);
+                error!("{:#}", e);
                 exit(1)
             },
             |_| exit(0),
         );
-}
-
-fn get_pgp_uid_by_node_uid<'a>(uid: &'a GraphNodeUid) -> Option<&'a OpenPgpUid> {
-    KEY_SET_MAP
-        .get()
-        .and_then(|v| {
-            v.get(&uid.key_id.to_string())
-                .map(|v| v.user_ids.get(&<&str as Into<String>>::into(uid.uid)))
-        })
-        .flatten()
 }

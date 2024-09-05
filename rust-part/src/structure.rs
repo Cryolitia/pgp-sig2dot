@@ -1,4 +1,5 @@
-use crate::{get_pgp_uid_by_node_uid, SIMPLE_OUTPUT};
+use crate::cert::get_pgp_uid_by_node_uid;
+use crate::SIMPLE_OUTPUT;
 use num_enum::{FromPrimitive, IntoPrimitive};
 use sequoia_openpgp::types::SignatureType;
 use serde::Serialize;
@@ -38,7 +39,7 @@ impl Borrow<str> for OpenPgpKey {
 
 #[derive(Debug, Clone, Eq, Serialize)]
 pub(crate) struct OpenPgpUid {
-    pub(crate) key_id: Arc<String>,
+    pub(crate) fingerprint: Arc<String>,
     pub(crate) uid: Arc<String>,
     pub(crate) name: String,
     pub(crate) email: String,
@@ -53,8 +54,8 @@ fn simple_output<T>(object: &T, f: &mut Formatter<'_>, or: &String) -> std::fmt:
 where
     T: Serialize,
 {
-    let simple_ouput = *SIMPLE_OUTPUT.get().unwrap_or(&false);
-    if !simple_ouput {
+    let simple_output = *SIMPLE_OUTPUT.get().unwrap_or(&false);
+    if !simple_output {
         write!(
             f,
             "{}",
@@ -73,27 +74,27 @@ impl Display for OpenPgpUid {
 
 impl PartialEq for OpenPgpUid {
     fn eq(&self, other: &Self) -> bool {
-        self.key_id == other.key_id && self.uid == other.uid
+        self.fingerprint == other.fingerprint && self.uid == other.uid
     }
 }
 
 impl Hash for OpenPgpUid {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.key_id.hash(state);
+        self.fingerprint.hash(state);
         self.uid.hash(state);
     }
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize)]
 pub(crate) struct GraphNodeUid<'a> {
-    pub(crate) key_id: &'a str,
+    pub(crate) fingerprint: &'a str,
     pub(crate) uid: &'a str,
 }
 
 impl Display for GraphNodeUid<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match get_pgp_uid_by_node_uid(self) {
-            None => simple_output(self, f, &self.key_id.to_string()),
+            None => simple_output(self, f, &self.fingerprint.to_string()),
             Some(v) => simple_output(v, f, &v.uid.to_string()),
         }
     }
@@ -133,7 +134,7 @@ impl Eq for dyn OpenPgpUidKey {}
 
 impl OpenPgpUidKey for OpenPgpUid {
     fn key(&self) -> &str {
-        &self.key_id
+        &self.fingerprint
     }
     fn uid(&self) -> &str {
         &self.uid
@@ -142,7 +143,7 @@ impl OpenPgpUidKey for OpenPgpUid {
 
 impl OpenPgpUidKey for &OpenPgpUid {
     fn key(&self) -> &str {
-        self.key_id.as_str()
+        self.fingerprint.as_str()
     }
     fn uid(&self) -> &str {
         self.uid.as_str()
@@ -151,7 +152,7 @@ impl OpenPgpUidKey for &OpenPgpUid {
 
 impl OpenPgpUidKey for OpenPgpSig {
     fn key(&self) -> &str {
-        self.key_id.as_str()
+        self.fingerprint.as_str()
     }
     fn uid(&self) -> &str {
         self.uid.as_str()
@@ -160,7 +161,7 @@ impl OpenPgpUidKey for OpenPgpSig {
 
 impl OpenPgpUidKey for &OpenPgpSig {
     fn key(&self) -> &str {
-        self.key_id.as_str()
+        self.fingerprint.as_str()
     }
     fn uid(&self) -> &str {
         self.uid.as_str()
@@ -169,7 +170,7 @@ impl OpenPgpUidKey for &OpenPgpSig {
 
 impl OpenPgpUidKey for GraphNodeUid<'_> {
     fn key(&self) -> &str {
-        self.key_id
+        self.fingerprint
     }
     fn uid(&self) -> &str {
         self.uid
@@ -178,7 +179,7 @@ impl OpenPgpUidKey for GraphNodeUid<'_> {
 
 impl OpenPgpUidKey for &GraphNodeUid<'_> {
     fn key(&self) -> &str {
-        self.key_id
+        self.fingerprint
     }
     fn uid(&self) -> &str {
         self.uid
@@ -188,7 +189,7 @@ impl OpenPgpUidKey for &GraphNodeUid<'_> {
 impl<'a> From<&'a OpenPgpUid> for GraphNodeUid<'a> {
     fn from(value: &'a OpenPgpUid) -> Self {
         GraphNodeUid {
-            key_id: value.key_id.as_str(),
+            fingerprint: value.fingerprint.as_str(),
             uid: value.uid.as_str(),
         }
     }
@@ -197,7 +198,7 @@ impl<'a> From<&'a OpenPgpUid> for GraphNodeUid<'a> {
 impl<'a> From<&&'a OpenPgpUid> for GraphNodeUid<'a> {
     fn from(value: &&'a OpenPgpUid) -> Self {
         GraphNodeUid {
-            key_id: value.key_id.as_str(),
+            fingerprint: value.fingerprint.as_str(),
             uid: value.uid.as_str(),
         }
     }
@@ -206,7 +207,7 @@ impl<'a> From<&&'a OpenPgpUid> for GraphNodeUid<'a> {
 impl<'a> From<&'a OpenPgpSig> for GraphNodeUid<'a> {
     fn from(value: &'a OpenPgpSig) -> Self {
         GraphNodeUid {
-            key_id: value.key_id.as_str(),
+            fingerprint: value.fingerprint.as_str(),
             uid: value.uid.as_str(),
         }
     }
@@ -214,7 +215,7 @@ impl<'a> From<&'a OpenPgpSig> for GraphNodeUid<'a> {
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize)]
 pub(crate) struct OpenPgpSig {
-    pub(crate) key_id: String,
+    pub(crate) fingerprint: String,
     pub(crate) uid: String,
     pub(crate) trust_level: u8,
     pub(crate) trust_value: OpenPgpSigTrust,
@@ -222,9 +223,32 @@ pub(crate) struct OpenPgpSig {
     pub(crate) creation_time: u64,
 }
 
+#[derive(Debug, Clone, Eq, PartialEq, Serialize)]
+pub(crate) struct GraphEdgeSig {
+    pub(crate) trust_level: u8,
+    pub(crate) trust_value: OpenPgpSigTrust,
+    pub(crate) sig_type: SigType,
+    pub(crate) creation_time: u64,
+}
+
+impl From<&OpenPgpSig> for GraphEdgeSig {
+    fn from(value: &OpenPgpSig) -> Self {
+        GraphEdgeSig {
+            trust_level: value.trust_level,
+            trust_value: value.trust_value,
+            sig_type: value.sig_type,
+            creation_time: value.creation_time,
+        }
+    }
+}
+
 impl Display for OpenPgpSig {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        simple_output(self, f, &self.sig_type.to_string().replace("\"", ""))
+        simple_output(
+            &<&OpenPgpSig as Into<GraphEdgeSig>>::into(self),
+            f,
+            &self.sig_type.to_string().replace("\"", ""),
+        )
     }
 }
 

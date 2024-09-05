@@ -21,7 +21,7 @@ if __name__ == '__main__':
         node_dict = {}
         node_dict["id"] = node.get_name()
         label = json.loads(json.loads(node.get_label()))
-        node_dict["key_id"] = label["key_id"]
+        node_dict["fingerprint"] = label["fingerprint"]
         node_dict["title"] = label["uid"]
         node_dict["name"] = label["name"]
         node_dict["email"] = label["email"]

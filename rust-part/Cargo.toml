@@ -4,25 +4,26 @@ version = "0.1.1"
 edition = "2021"
 
 [dependencies]
+anyhow = { version = "1.0.86", features = ["backtrace"] }
 clap = { version = "4.5.15", features = ["derive"] }
 clap-verbosity-flag = "2.2.1"
 clap_complete = "4.5.14"
 clap_mangen = "0.2.23"
+clio = { version = "0.3.5", features = ["clap-parse", "curl", "http-curl"] }
 env_logger = "0.11.5"
+futures = "0.3.30"
 log = "0.4.22"
 num_enum = { version = "0.7.3", features = ["complex-expressions"] }
 petgraph = { version = "0.6.5", features = ["rayon", "graphmap"], default-features = false }
 serde = { version = "1.0.206", features = ["derive", "rc"] }
 serde_json = "1.0.124"
 serialize_display_adapter_macro_derive = "0.2.0"
+tokio = "1.39.2"
 
 sequoia-wot = "0.12.0"
 sequoia-cert-store = "0.6.0"
 sequoia-openpgp = { version = "1.21.2", default-features = false }
-clio = { version = "0.3.5", features = ["clap-parse", "curl", "http-curl"] }
 sequoia-net = "0.28.0"
-futures = "0.3.30"
-tokio = "1.39.2"
 
 [features]
 default = ["sequoia-openpgp/default"]

@@ -17,6 +17,11 @@ pub struct Cli {
     #[arg(global = true, long, value_parser, short = 'k', num_args = 1..)]
     pub(crate) fingerprint: Option<Vec<String>>,
 
+    /// Gossip the trust paths from the trust root(given above by `--fingerprint`), with an integer value which means the depth limit of gossiping
+    /// Specially, 0 means no depth limit, it's only allowed without online mode
+    #[arg(global = true, long, value_parser, num_args = 1..)]
+    pub(crate) gossip: Option<u8>,
+
     /// Show only primary UIDs
     #[arg(global = true, long, short = 'p')]
     pub(crate) show_primary_uid_only: bool,
