@@ -2342,7 +2342,7 @@ dependencies = [
 
 [[package]]
 name = "pgp-sig2dot"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "clap",

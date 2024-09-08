@@ -4,10 +4,25 @@ OpenPGP sign party tool —— Visualize the Web of Trust
 
 This tool contains two part:
 
-1. The rust part parse OpenPGP data, fetching keys from keyserver, and output the DOT of the web of trust.
+1. The Rust part parse OpenPGP data, fetching keys from keyserver, and output the DOT of the web of trust.
 2. The second part parse DOT input, and call [jaal](https://github.com/imohitmayank/jaal) or [networkx](https://github.com/networkx/networkx) or [graphviz](https://graphviz.org/) as a visualization backend.
 
+## Gallery
+
+![demo](https://github.com/Cryolitia/pgp-sig2dot/blob/main/demo.png?raw=true)
+![https://openpgpkey.project-trans.org/](https://openpgpkey.project-trans.org/wot.svg)
+
 ## Usage Example
+
+### Cargo
+
+The Rust part can be used independently and output in DOT format, and can be further used with tools such as graphviz. This part has been published to creates.io: https://crates.io/crates/pgp-sig2dot
+
+Run `pgp-sig2dot --help` to find out how to use it.
+
+### Nix
+
+This set of tools is further packaged into Nix, making it easy to use out of the box.
 
 - Show the web of trust in `gpg` keyring, show only primary uid, use `networkx` as backend.
 
