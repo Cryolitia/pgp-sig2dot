@@ -1,6 +1,6 @@
 [package]
 name = "pgp-sig2dot"
-version = "0.2.3"
+version = "0.2.4"
 edition = "2021"
 description = "OpenPGP sign party tool —— Visualize the Web of Trust"
 license = "MIT"

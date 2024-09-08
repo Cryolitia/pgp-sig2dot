@@ -5,7 +5,8 @@ OpenPGP sign party tool —— Visualize the Web of Trust
 This tool contains two part:
 
 1. The Rust part parse OpenPGP data, fetching keys from keyserver, and output the DOT of the web of trust.
-2. The second part parse DOT input, and call [jaal](https://github.com/imohitmayank/jaal) or [networkx](https://github.com/networkx/networkx) or [graphviz](https://graphviz.org/) as a visualization backend.
+2. The second part parse DOT input, and call [jaal](https://github.com/imohitmayank/jaal)
+   or [networkx](https://github.com/networkx/networkx) or [graphviz](https://graphviz.org/) as a visualization backend.
 
 ## Gallery
 
@@ -16,7 +17,9 @@ This tool contains two part:
 
 ### Cargo
 
-The Rust part can be used independently and output in DOT format, and can be further used with tools such as graphviz. This part has been published to creates.io: https://crates.io/crates/pgp-sig2dot
+The Rust part can be used independently and output in DOT format, and can be further used with tools such as graphviz.
+
+This part has been published to creates.io: https://crates.io/crates/pgp-sig2dot
 
 Run `pgp-sig2dot --help` to find out how to use it.
 
@@ -30,7 +33,8 @@ This set of tools is further packaged into Nix, making it easy to use out of the
     gpg --export | nix run github:Cryolitia/pgp-sig2dot#pgp-sig2dot-networkx -- -vv --import - -p
     ```
 
-- Show the web of trust in AOSCC 2024 keyring(not provide in this repo), show only primary uid, fetching new signatures on keyserver, use `networkx` as backend.
+- Show the web of trust in AOSCC 2024 keyring(not provide in this repo), show only primary uid, fetching new signatures
+  on keyserver, use `networkx` as backend.
 
     ```sh
     cat aoscc2024.gpg | nix run github:Cryolitia/pgp-sig2dot#pgp-sig2dot-networkx -- -vv --import - -p --online

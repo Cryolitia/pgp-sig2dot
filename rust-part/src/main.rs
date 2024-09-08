@@ -55,11 +55,11 @@ async fn main() {
                     }
                     Ok(())
                 })()
-                    .err()
-                    .inspect(|e| {
-                        error!("{:#}", e);
-                        exit(1);
-                    });
+                .err()
+                .inspect(|e| {
+                    error!("{:#}", e);
+                    exit(1);
+                });
                 exit(0);
             }
         }

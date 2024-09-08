@@ -1,7 +1,7 @@
 use crate::structure::{GraphNodeUid, OpenPgpUid, OpenPgpUidLayer};
 use crate::{CLI_ARGS, KEY_SET_MAP};
 use anyhow::{anyhow, Context};
-use log::{info, warn};
+use log::{info, trace, warn};
 use sequoia_net::KeyServer;
 use sequoia_openpgp::{Cert, Fingerprint};
 use serde::Serialize;
@@ -87,21 +87,32 @@ pub(crate) fn fetch_cert_from_keyserver_recursive(
     depth: u8,
     result: &mut HashMap<Fingerprint, Cert>,
 ) {
+    info!("Gossiping on depth:\t{},\t\tkeys:\t{}", depth, search.len());
     let mut search_next_layer: HashSet<Fingerprint> = Default::default();
     for fingerprint in search {
-        info!("Gossiping key:\t{}\t\tdepth:\t{}", fingerprint, depth);
+        trace!("Gossiping key:\t{}\t\tdepth:\t{}", fingerprint, depth);
         if result.contains_key(fingerprint) {
             continue;
         }
-        match fetch_cert_from_keyserver(keyserver, fingerprint) {
+        match fetch_cert_from_keyserver(keyserver, fingerprint)
+            .with_context(|| format!("Gossiping key:\t{}", fingerprint))
+        {
             Ok(cert) => {
                 result.insert(fingerprint.clone(), cert.clone());
-                if depth > 0 {
-                    for uid in cert.userids() {
-                        for sig in uid.signatures() {
-                            search_next_layer.extend(sig.issuer_fingerprints().cloned());
-                        }
+                let mut issuers: HashSet<Fingerprint> = Default::default();
+                for uid in cert.userids() {
+                    for sig in uid.signatures() {
+                        issuers.extend(sig.issuer_fingerprints().cloned());
                     }
+                }
+                info!(
+                    "Gossiping key:\t{}\t\tissuers:\t{}\tdepth:\t{}",
+                    fingerprint,
+                    issuers.len(),
+                    depth
+                );
+                if depth > 0 {
+                    search_next_layer.extend(issuers);
                 }
             }
             Err(err) => {
