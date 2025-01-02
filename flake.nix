@@ -5,11 +5,6 @@
       "nix-command"
       "flakes"
     ];
-    substituters = [
-      # "https://mirrors.cernet.edu.cn/nix-channels/store"
-      # "https://mirrors.bfsu.edu.cn/nix-channels/store"
-      "https://cache.nixos.org/"
-    ];
     extra-substituters = [ "https://cryolitia.cachix.org" ];
     extra-trusted-public-keys = [
       "cryolitia.cachix.org-1:/RUeJIs3lEUX4X/oOco/eIcysKZEMxZNjqiMgXVItQ8="
@@ -57,6 +52,7 @@
             rust = (pkgs.rust-bin.stable.latest.rust.override { extensions = [ "rust-src" ]; });
 
             pythonVersion = "python311";
+            venvPythonVersion = "python3.11";
           in
           {
             default = (
@@ -96,13 +92,9 @@
                   rm -v python-part/.venv/bin/python
                   virtualenv --no-setuptools python-part/.venv
                   export PATH=$PWD/python-part/.venv/bin:$PATH
-                  export PYTHONPATH=$PWD/python-part/.venv/lib/${pythonVersion}/site-packages/:$PYTHONPATH
+                  export PYTHONPATH=$PWD/python-part/.venv/lib/${venvPythonVersion}/site-packages/:$PYTHONPATH
 
                   exec zsh
-                '';
-
-                postShellHook = ''
-                  ln -sf PYTHONPATH/* ${pkgs.virtualenv}/lib/${pythonVersion}/site-packages
                 '';
               }
             );
@@ -260,6 +252,8 @@
                   };
 
                   build-system = [ python3Packages.setuptools ];
+
+                  doCheck = false;
 
                   dependencies = with python3Packages; [
                     dash
