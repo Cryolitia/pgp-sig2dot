@@ -192,15 +192,17 @@
                 }:
                 python3Packages.buildPythonPackage rec {
                   pname = "visdcc";
-                  version = "0.0.50";
+                  version = "0.0.63";
                   pyproject = true;
 
                   src = fetchPypi {
                     inherit pname version;
-                    hash = "sha256-IqtHcCfaMsoZa/cXXBL4a1CTb9wiJPw67n2or4y70as=";
+                    hash = "sha256-PBGyTzpjBguQ+kCyYKpyljKa5G9yOc/yDaobT3U/NAA=";
                   };
 
                   build-system = [ python3Packages.setuptools ];
+
+                  dependencies = with python3Packages; [ dash ];
 
                   meta = with lib; {
                     description = "Dash Core Components for Visualization";
@@ -241,14 +243,14 @@
                 }:
                 python3Packages.buildPythonPackage {
                   pname = "jaal";
-                  version = "0.1.7";
+                  version = "0.1.8";
                   pyproject = true;
 
                   src = fetchFromGitHub {
                     owner = "imohitmayank";
                     repo = "jaal";
-                    rev = "v0.1.7";
-                    hash = "sha256-/XlybjeDGfkchnOXTgJ8odUcgY0X7TlJX8MC7eNXFB8=";
+                    rev = "v0.1.8";
+                    hash = "sha256-PQvLq70mrH+ajRDbi3SyyfKjQ43JECl2q2S5ObSpj0I=";
                   };
 
                   build-system = [ python3Packages.setuptools ];

@@ -356,3 +356,18 @@ impl From<SignatureType> for SigType {
         }
     }
 }
+
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize)]
+pub(crate) struct GraphNodeUidOwned {
+    pub(crate) fingerprint: String,
+    pub(crate) uid: String,
+}
+
+impl<'a> From<&'a GraphNodeUidOwned> for GraphNodeUid<'a> {
+    fn from(value: &'a GraphNodeUidOwned) -> Self {
+        GraphNodeUid {
+            fingerprint: value.fingerprint.as_str(),
+            uid: value.uid.as_str(),
+        }
+    }
+}

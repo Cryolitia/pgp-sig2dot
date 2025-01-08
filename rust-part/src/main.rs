@@ -1,9 +1,12 @@
 use crate::cert::get_pgp_uid_by_node_uid;
 use crate::cli::{Cli, Commands, GenCommand};
-use crate::structure::{GraphNodeUid, OpenPgpKey, OpenPgpSig, OpenPgpUid, SigType};
+use crate::structure::{
+    GraphNodeUid, GraphNodeUidOwned, OpenPgpKey, OpenPgpSig, OpenPgpUid, SigType,
+};
 use anyhow::anyhow;
 use clap::{CommandFactory, Parser};
-use log::{debug, error, trace, warn};
+use log::{debug, error, info, trace, warn};
+use petgraph::algo::{has_path_connecting, DfsSpace};
 use petgraph::dot::Dot;
 use petgraph::graphmap::DiGraphMap;
 use sequoia_net::KeyServer;
@@ -83,6 +86,10 @@ async fn main() {
             return Err(anyhow!("Offline mode is not allowed without keyring"));
         }
 
+        if args.trust_root.is_some() && args.gossip.is_none() {
+            return Err(anyhow!("Trust root is only allowed to be set in gossip mode"));
+        }
+
         let mut fingerprints: HashSet<Fingerprint> = Default::default();
         let mut certs: HashMap<Fingerprint, Cert> = Default::default();
 
@@ -129,6 +136,25 @@ async fn main() {
                         }
                         _ => {
                             Some(v)
+                        }
+                    }
+                })
+            }).collect()
+        });
+
+        let args_trust_roots: HashSet<String> = args.trust_root.map_or(Default::default(), |v| {
+            v.into_iter().filter_map(|v| {
+                Fingerprint::from_hex(v.as_str()).map_or_else(|e| {
+                    warn!("Invalid Trust Root Fingerprint String: {}", e);
+                    None
+                }, |v| {
+                    match v {
+                        Fingerprint::Invalid(_) => {
+                            warn!("Invalid Trust Root Fingerprint: {:?}", v);
+                            None
+                        }
+                        _ => {
+                            Some(v.to_string())
                         }
                     }
                 })
@@ -357,6 +383,99 @@ async fn main() {
                 });
             })
         });
+
+        let nodes_to_remove: Vec<GraphNodeUidOwned>;
+        let nodes_to_remove_2: Vec<GraphNodeUidOwned>;
+
+        if CLI_ARGS.get().unwrap().trust_root.is_some() {
+            let trust_roots: HashSet<GraphNodeUid> = graph.nodes().filter(|node| {
+                args_trust_roots.contains(node.fingerprint)
+            }).collect();
+            let args_fingerprints_string: HashSet<String> = args_fingerprints.iter().map(|v| v.to_string()).collect();
+            let gossip_targets: HashSet<GraphNodeUid> = graph.nodes().filter(|node| {
+                args_fingerprints_string.contains(node.fingerprint)
+            }).collect();
+
+            let mut graph_without_trust_roots: DiGraphMap<GraphNodeUid, &OpenPgpSig> = graph.clone();
+            trust_roots.iter().for_each(|root| {
+                graph_without_trust_roots.remove_node(*root);
+            });
+
+            let mut graph_without_targets: DiGraphMap<GraphNodeUid, &OpenPgpSig> = graph.clone();
+            gossip_targets.iter().for_each(|target| {
+                graph_without_targets.remove_node(*target);
+            });
+
+            let mut space_without_trust_roots = DfsSpace::new(&graph_without_trust_roots);
+            let mut space_without_targets = DfsSpace::new(&graph_without_targets);
+
+            nodes_to_remove = graph.nodes().filter(|node| {
+                if trust_roots.contains(node) || gossip_targets.contains(node) {
+                    return false;
+                }
+                let mut has_from = false;
+                for root in trust_roots.iter() {
+                    if has_path_connecting(&graph_without_targets, *root, *node, Some(&mut space_without_targets)) {
+                        has_from = true;
+                        info!("Found path from {:?} to {:?}", root, node);
+                        break;
+                    }
+                }
+                if !has_from {
+                    info!("Remove node due to not from trust roots: {:?}", node);
+                    return true;
+                }
+                let mut has_to = false;
+                for target in gossip_targets.iter() {
+                    if has_path_connecting(&graph_without_trust_roots, *node, *target, Some(&mut space_without_trust_roots)) {
+                        has_to = true;
+                        info!("Found path from {:?} to {:?}", node, target);
+                        break;
+                    }
+                }
+                if !has_to {
+                    info!("Remove node due to not to targets: {:?}", node);
+                    return true;
+                }
+                false
+            }).map(|node| GraphNodeUidOwned {
+                fingerprint: node.fingerprint.to_string(),
+                uid: node.uid.to_string(),
+            }).collect();
+
+            nodes_to_remove.iter().for_each(|node| {
+                graph.remove_node(node.into());
+            });
+
+            nodes_to_remove_2 = graph.nodes().filter(|node| {
+                if !trust_roots.contains(node) && !gossip_targets.contains(node) {
+                    return false;
+                }
+                if trust_roots.contains(node) {
+                    let mut has_neighbor_outside = false;
+                    for neighbor in graph.neighbors(*node) {
+                        if !trust_roots.contains(&neighbor) {
+                            has_neighbor_outside = true;
+                            break;
+                        }
+                    }
+                    if !has_neighbor_outside {
+                        info!("Remove node due to no neighbor outside trust roots: {:?}", node);
+                        return true;
+                    }
+                }
+                false
+            }).map(|node| GraphNodeUidOwned {
+                fingerprint: node.fingerprint.to_string(),
+                uid: node.uid.to_string(),
+            }).collect();
+
+            nodes_to_remove_2.iter().for_each(|node| {
+                graph.remove_node(node.into());
+            });
+        }
+
+
 
         let binding = &|_, (_, uid)| {
             let mut attr = get_pgp_uid_by_node_uid(uid).map(|v| {
