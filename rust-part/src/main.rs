@@ -119,10 +119,18 @@ async fn main() {
         let args_fingerprints: Vec<Fingerprint> = args.fingerprint.map_or(Default::default(), |v| {
             v.into_iter().filter_map(|v| {
                 Fingerprint::from_hex(v.as_str()).map_or_else(|e| {
-                    warn!("Invalid Fingerprint: {}", e);
+                    warn!("Invalid Fingerprint String: {}", e);
                     None
                 }, |v| {
-                    Some(v)
+                    match v {
+                        Fingerprint::Invalid(_) => {
+                            warn!("Invalid Fingerprint: {:?}", v);
+                            None
+                        }
+                        _ => {
+                            Some(v)
+                        }
+                    }
                 })
             }).collect()
         });
@@ -149,8 +157,6 @@ async fn main() {
                     });
             }
         }
-
-        trace!("{:?}", certs);
 
         let mut key_set: HashMap<Arc<String>, OpenPgpKey> = certs
             .iter()
@@ -184,6 +190,7 @@ async fn main() {
                                         .map(|user_id| {
                                             let user_id_synopsis: UserIDSynopsis =
                                                 user_id.clone().into();
+                                            trace!("{:#?}", user_id);
                                             let uid = Arc::new(user_id.to_string());
                                             (uid.clone(), OpenPgpUid {
                                                 fingerprint: id.clone(),
@@ -229,7 +236,7 @@ async fn main() {
                                                     .filter_map(|sig| {
                                                         Some(OpenPgpSig {
                                                             fingerprint: sig.issuer_fingerprints().next().map_or_else(|| {
-                                                                warn!("Invalid Issuer: {:?}", sig);
+                                                                warn!("Invalid Issuer - Fingerprint not found for sig on {:?}: {:?}", uid, sig);
                                                                 "".to_string()
                                                             }, |v| v.to_string()),
                                                             uid: sig.signers_user_id().map_or_else(|| {

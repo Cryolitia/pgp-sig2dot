@@ -102,6 +102,7 @@ pub(crate) fn fetch_cert_from_keyserver_recursive(
                 let mut issuers: HashSet<Fingerprint> = Default::default();
                 for uid in cert.userids() {
                     for sig in uid.signatures() {
+                        trace!("{:#?}", sig);
                         issuers.extend(sig.issuer_fingerprints().cloned());
                     }
                 }
