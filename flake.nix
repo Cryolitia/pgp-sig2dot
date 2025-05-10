@@ -243,14 +243,14 @@
                 }:
                 python3Packages.buildPythonPackage {
                   pname = "jaal";
-                  version = "0.1.8";
+                  version = "0.1.9";
                   pyproject = true;
 
                   src = fetchFromGitHub {
                     owner = "imohitmayank";
                     repo = "jaal";
-                    rev = "v0.1.8";
-                    hash = "sha256-PQvLq70mrH+ajRDbi3SyyfKjQ43JECl2q2S5ObSpj0I=";
+                    rev = "v0.1.9";
+                    hash = "sha256-BT4/4EcLgSFScjVfMF0qmhU8GMIThzUws/hWKJex8zk=";
                   };
 
                   build-system = [ python3Packages.setuptools ];
