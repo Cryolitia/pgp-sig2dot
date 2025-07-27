@@ -108,7 +108,6 @@
           let
             pkgs = import nixpkgs {
               inherit system;
-              overlays = [ (import rust-overlay) ];
             };
             lib = pkgs.lib;
             legacy-meta = with lib; {
@@ -128,8 +127,7 @@
                 {
                   lib,
                   stdenv,
-                  rust-bin,
-                  makeRustPlatform,
+                  rustPlatform,
                   installShellFiles,
                   pkg-config,
                   curl,
@@ -137,12 +135,6 @@
                   nettle,
                   sqlite,
                 }:
-                let
-                  rustPlatform = makeRustPlatform {
-                    cargo = rust-bin.stable.latest.minimal;
-                    rustc = rust-bin.stable.latest.minimal;
-                  };
-                in
                 rustPlatform.buildRustPackage {
                   pname = "pgp-sig2dot-rust-part";
                   version = "unstable";
