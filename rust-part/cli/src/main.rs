@@ -1,510 +1,561 @@
-use crate::cert::get_pgp_uid_by_node_uid;
-use crate::cli::{Cli, Commands, GenCommand};
-use crate::structure::{
-    GraphNodeUid, GraphNodeUidOwned, OpenPgpKey, OpenPgpSig, OpenPgpUid, SigType,
-};
-use anyhow::anyhow;
-use clap::{CommandFactory, Parser};
-use log::{debug, error, info, trace, warn};
+use crate::cli::{Cli, Commands, DrawOptions, FetchSource, GenCommand};
+use crate::structure::graph_node_uid_fmt;
+use crate::structure::open_pgp_sig_fmt;
+use anyhow::{anyhow, Context};
+use clap::{crate_version, CommandFactory, Parser};
+use format::lazy_format;
+use log::{debug, info, trace, warn};
 use petgraph::algo::{has_path_connecting, DfsSpace};
 use petgraph::dot::Dot;
 use petgraph::graphmap::DiGraphMap;
-use sequoia_net::KeyServer;
-use sequoia_openpgp::cert::CertParser;
+use pgp_sig2dot::cert::build_key_set;
+use pgp_sig2dot::get_pgp_uid_by_node_uid;
+use pgp_sig2dot::helper::SuppressResultOk;
+use pgp_sig2dot::helper::{SuppressErrors, SuppressPrint, SuppressResultErrors};
+use pgp_sig2dot::input::{parse_input_fingerprints, parse_key_block};
+use pgp_sig2dot::keyserver;
+use pgp_sig2dot::structure::{GraphNodeUid, GraphNodeUidOwned, OpenPgpKey, OpenPgpSig, SigType};
+use sequoia_net::{wkd, KeyServer};
 use sequoia_openpgp::parse::Parse;
-use sequoia_openpgp::policy::StandardPolicy;
-use sequoia_openpgp::{Cert, Fingerprint};
-use sequoia_wot::{CertSynopsis, RevocationStatus, UserIDSynopsis};
+use sequoia_openpgp::serialize::MarshalInto;
+use sequoia_openpgp::{Cert, Fingerprint, KeyHandle};
 use std::collections::{HashMap, HashSet};
 use std::default::Default;
 use std::fs::create_dir_all;
-use std::io::{Error, Read};
-use std::process::exit;
+use std::hash::RandomState;
+use std::io::Read;
 use std::sync::{Arc, OnceLock};
-use std::time::{SystemTime, UNIX_EPOCH};
+use validator::validate_email;
 
-mod cert;
 mod cli;
 mod structure;
 
-static CLI_ARGS: OnceLock<Cli> = OnceLock::new();
+static DRAW_OPTIONS: OnceLock<DrawOptions> = OnceLock::new();
 static KEY_SET_MAP: OnceLock<HashMap<Arc<String>, OpenPgpKey>> = OnceLock::new();
 static GOSSIP_LAYER_MAP: OnceLock<HashMap<Arc<String>, u8>> = OnceLock::new();
 
 #[tokio::main]
-async fn main() {
+async fn main() -> anyhow::Result<()> {
     let args = Cli::parse();
-    let policy = StandardPolicy::new();
     let log_level = args.verbose.log_level_filter();
     env_logger::Builder::new().filter_level(log_level).init();
-    debug!("Cli args: {:?}", args);
-
-    if let Some(command) = args.command {
-        match command {
-            Commands::Gen { gen_command } => {
-                (|| -> anyhow::Result<()> {
-                    let cmd = Cli::command();
-                    match gen_command {
-                        GenCommand::Man { path } => {
-                            let out_dir = path.to_path_buf();
-                            debug!("man: generate to{:?}", out_dir);
-                            create_dir_all(&out_dir)?;
-                            clap_mangen::generate_to(Cli::command(), out_dir)?;
-                        }
-                        GenCommand::Complete { args, mut output } => {
-                            let name = cmd.get_display_name().unwrap_or_else(|| cmd.get_name());
-                            clap_complete::generate(args, &mut Cli::command(), name, &mut output);
-                        }
-                    }
-                    Ok(())
-                })()
-                .err()
-                .inspect(|e| {
-                    error!("{:#}", e);
-                    exit(1);
-                });
-                exit(0);
+    debug!("Cli args: {args:?}");
+    match args.command {
+        Commands::Cli { gen_command } => {
+            let cmd = Cli::command();
+            match gen_command {
+                GenCommand::ManGen { path } => {
+                    let out_dir = path.to_path_buf();
+                    debug!("man: generate to{out_dir:?}");
+                    create_dir_all(&out_dir)?;
+                    clap_mangen::generate_to(Cli::command(), out_dir)?;
+                }
+                GenCommand::Complete { args, mut output } => {
+                    let name = cmd.get_display_name().unwrap_or_else(|| cmd.get_name());
+                    clap_complete::generate(args, &mut Cli::command(), name, &mut output);
+                }
             }
+            Ok(())
         }
-    }
+        Commands::Draw { draw_options } => {
+            let keyserver: OnceLock<KeyServer> = OnceLock::new();
 
-    (|| -> anyhow::Result<()> {
-        let keyserver: OnceLock<KeyServer> = OnceLock::new();
+            keyserver
+                .set(KeyServer::new(&draw_options.input.keyserver)?)
+                .err();
+            DRAW_OPTIONS.set(draw_options.clone()).unwrap();
 
-        keyserver.set(KeyServer::new(&args.keyserver)?).err();
-        CLI_ARGS.set(args.clone()).unwrap();
+            if draw_options.processor.gossip == Some(0) && draw_options.input.online {
+                return Err(anyhow!("Online mode is not allowed with depth limit 0"));
+            }
 
-        if args.gossip == Some(0) && args.online {
-            return Err(anyhow!("Online mode is not allowed with depth limit 0"));
-        }
+            let mut full_fingerprints: HashSet<Fingerprint> = Default::default();
+            let mut certs: HashMap<Fingerprint, Cert> = Default::default();
 
-        if args.import.is_none() && args.fingerprint.is_none() {
-            return Err(anyhow!("No input found, please consider provide at least one of keyring or fingerprint."));
-        }
+            let args_import_is_none = draw_options.input.import.is_none();
 
-        if args.fingerprint.is_some() && args.import.is_none() && !args.online {
-            return Err(anyhow!("Offline mode is not allowed without keyring"));
-        }
+            draw_options
+                .input
+                .import
+                .map_and_warn_result("Importing key block", |mut input| {
+                    let mut keyring: Vec<u8> = Default::default();
+                    input
+                        .read_to_end(&mut keyring)
+                        .with_context(|| format!("While importing key block from {input}"))?;
+                    certs.extend(parse_key_block(&keyring)?);
+                    Ok::<(), anyhow::Error>(())
+                });
 
-        if args.trust_root.is_some() && args.gossip.is_none() {
-            return Err(anyhow!("Trust root is only allowed to be set in gossip mode"));
-        }
+            full_fingerprints.extend(
+                certs
+                    .keys()
+                    .map(|v| v.to_owned())
+                    .collect::<Vec<Fingerprint>>(),
+            );
 
-        let mut fingerprints: HashSet<Fingerprint> = Default::default();
-        let mut certs: HashMap<Fingerprint, Cert> = Default::default();
+            let input_fingerprints: Vec<Fingerprint> = draw_options
+                .fingerprint
+                .as_deref()
+                .map_or(Default::default(), parse_input_fingerprints);
+            let input_trust_roots: HashSet<String> = draw_options
+                .processor
+                .trust_root
+                .as_deref()
+                .map_or(Default::default(), parse_input_fingerprints)
+                .into_iter()
+                .map(|v| v.to_string())
+                .collect();
 
-        let args_import_is_none = args.import.is_none();
+            full_fingerprints.extend(input_fingerprints.iter().cloned());
 
-        args.import.map_or(Ok(()),
-                           |mut input| {
-                               let mut keyring: Vec<u8> = Default::default();
-                               input.read_to_end(&mut keyring)?;
-                               CertParser::from_bytes(&keyring).map_or_else(
-                                   |e| warn!("{}" ,e),
-                                   |v| {
-                                       v.for_each(|r| {
-                                           r.map_or_else(
-                                               |e| {
-                                                   warn!("Invalid Cert: {}", e);
-                                               },
-                                               |v| {
-                                                   if args.online {
-                                                       fingerprints.insert(v.fingerprint());
-                                                   }
-                                                   certs.insert(v.fingerprint(), v);
-                                               },
-                                           )
-                                       });
-                                   },
-                               );
-                               Ok(())
-                           },
-        ).err().inspect(|e: &Error| {
-            warn!("{}", e);
-        });
+            if draw_options.input.online {
+                full_fingerprints.iter().for_each(|fingerprint| {
+                    keyserver::fetch_cert_from_keyserver_once_lock(&keyserver, fingerprint)
+                        .with_context(|| {
+                            format!("While fetching cert from keyserver: {fingerprint}")
+                        })
+                        .ok_or_warn("Failed to fetch cert from keyserver", |v| {
+                            certs.insert(fingerprint.clone(), v);
+                            Ok::<(), String>(())
+                        });
+                });
+            }
 
-        let args_fingerprints: Vec<Fingerprint> = args.fingerprint.map_or(Default::default(), |v| {
-            v.into_iter().filter_map(|v| {
-                Fingerprint::from_hex(v.as_str()).map_or_else(|e| {
-                    warn!("Invalid Fingerprint String: {}", e);
-                    None
-                }, |v| {
-                    match v {
-                        Fingerprint::Invalid(_) => {
-                            warn!("Invalid Fingerprint: {:?}", v);
-                            None
-                        }
-                        _ => {
-                            Some(v)
-                        }
-                    }
-                })
-            }).collect()
-        });
-
-        let args_trust_roots: HashSet<String> = args.trust_root.map_or(Default::default(), |v| {
-            v.into_iter().filter_map(|v| {
-                Fingerprint::from_hex(v.as_str()).map_or_else(|e| {
-                    warn!("Invalid Trust Root Fingerprint String: {}", e);
-                    None
-                }, |v| {
-                    match v {
-                        Fingerprint::Invalid(_) => {
-                            warn!("Invalid Trust Root Fingerprint: {:?}", v);
-                            None
-                        }
-                        _ => {
-                            Some(v.to_string())
-                        }
-                    }
-                })
-            }).collect()
-        });
-
-        fingerprints.extend(args_fingerprints.iter().cloned());
-
-        if args.online {
-            fingerprints.iter().for_each(|fingerprint| {
-                match cert::fetch_cert_from_keyserver_once_lock(&keyserver, fingerprint) {
-                    Ok(cert) => { certs.insert(fingerprint.clone(), cert); }
-                    Err(e) => { warn!("{:#}", e) }
-                };
-            });
-        }
-
-        if args.online && !args_fingerprints.is_empty() && args.gossip.is_some() {
-            let gossip = args.gossip.unwrap_or(0);
-            if gossip > 0 {
-                let mut result: HashMap<Fingerprint, Cert> = Default::default();
-                cert::fetch_cert_from_keyserver_once_lock_recursive(&keyserver, &args_fingerprints.iter().cloned().collect(), gossip, &mut result);
-                result.into_iter()
-                    .for_each(|(fingerprint, cert)| {
+            if draw_options.input.online
+                && !input_fingerprints.is_empty()
+                && draw_options.processor.gossip.is_some()
+            {
+                let gossip = draw_options.processor.gossip.unwrap_or(0);
+                if gossip > 0 {
+                    let mut result: HashMap<Fingerprint, Cert> = Default::default();
+                    keyserver::fetch_cert_from_keyserver_once_lock_recursive(
+                        &keyserver,
+                        &input_fingerprints.iter().cloned().collect(),
+                        gossip,
+                        &mut result,
+                    );
+                    result.into_iter().for_each(|(fingerprint, cert)| {
                         certs.insert(fingerprint, cert);
                     });
-            }
-        }
-
-        let mut key_set: HashMap<Arc<String>, OpenPgpKey> = certs
-            .iter()
-            .filter(|(fingerprint, _)| {
-                if args.gossip.is_none() && !args_import_is_none && !args_fingerprints.is_empty() {
-                    args_fingerprints.contains(fingerprint)
-                } else {
-                    true
                 }
-            })
-            .filter_map(|(_, cert)| {
-                cert.with_policy(&policy, SystemTime::now())
-                    .map_err(|e| error!("{}", e))
-                    .map_or_else(
-                        |_| None,
-                        |cert| {
-                            let cert_synopsis: CertSynopsis = cert.clone().into();
-                            let id = Arc::new(cert_synopsis.fingerprint().to_string());
-                            let primary_id = Arc::new(cert.primary_userid().map(|v| v.userid().to_string()).unwrap_or_default());
-                            Some((
-                                id.clone(),
-                                OpenPgpKey {
-                                    id: id.clone(),
-                                    is_revoked: cert_synopsis.revocation_status()
-                                        != RevocationStatus::NotAsFarAsWeKnow,
-                                    is_expired: cert_synopsis
-                                        .expiration_time()
-                                        .map_or_else(|| false, |v| v < SystemTime::now()),
-                                    user_ids: cert
-                                        .userids()
-                                        .map(|user_id| {
-                                            let user_id_synopsis: UserIDSynopsis =
-                                                user_id.clone().into();
-                                            trace!("{:#?}", user_id);
-                                            let uid = Arc::new(user_id.to_string());
-                                            (uid.clone(), OpenPgpUid {
-                                                fingerprint: id.clone(),
-                                                uid: uid.clone(),
-                                                name: user_id.name2().map_or_else(
-                                                    |e| {
-                                                        warn!("Invalid Name: {}", e);
-                                                        "".to_string()
-                                                    },
-                                                    |v| {
-                                                        v.map_or_else(
-                                                            || "".to_string(),
-                                                            |v| v.to_string(),
-                                                        )
-                                                    },
-                                                ),
-                                                email: user_id.email2().map_or_else(
-                                                    |e| {
-                                                        warn!("Invalid Email: {}", e);
-                                                        "".to_string()
-                                                    },
-                                                    |v| {
-                                                        v.map_or_else(
-                                                            || "".to_string(),
-                                                            |v| v.to_string(),
-                                                        )
-                                                    },
-                                                ),
-                                                comment: user_id.comment2().map_or_else(
-                                                    |e| {
-                                                        warn!("Invalid Comment: {}", e);
-                                                        "".to_string()
-                                                    },
-                                                    |v| {
-                                                        v.map_or_else(
-                                                            || "".to_string(),
-                                                            |v| v.to_string(),
-                                                        )
-                                                    },
-                                                ),
-                                                sig_vec: user_id
-                                                    .signatures()
-                                                    .filter_map(|sig| {
-                                                        Some(OpenPgpSig {
-                                                            fingerprint: sig.issuer_fingerprints().next().map_or_else(|| {
-                                                                warn!("Invalid Issuer - Fingerprint not found for sig on {:?}: {:?}", uid, sig);
-                                                                "".to_string()
-                                                            }, |v| v.to_string()),
-                                                            uid: sig.signers_user_id().map_or_else(|| {
-                                                                "".to_string()
-                                                            }, |v| String::from_utf8(Vec::from(v)).unwrap_or_else(|e| {
-                                                                warn!("Invalid Signer User ID: {}", e);
-                                                                "".to_string()
-                                                            })),
-                                                            trust_level: sig.trust_signature().unwrap_or((0, 0)).0,
-                                                            trust_value: sig.trust_signature().unwrap_or((0, 0)).1.into(),
-                                                            sig_type: sig.typ().into(),
-                                                            creation_time: sig.signature_creation_time()?.duration_since(UNIX_EPOCH).ok()?.as_secs(),
-                                                        })
-                                                    })
-                                                    .collect(),
-                                                is_revoked: user_id_synopsis.revocation_status()
-                                                    != RevocationStatus::NotAsFarAsWeKnow,
-                                                is_primary: user_id.userid().to_string() == *primary_id,
-                                            })
-                                        })
-                                        .collect(),
-                                    primary_user_id: primary_id.clone(),
-                                },
-                            ))
-                        },
-                    )
-            })
-            .collect();
-
-        if args.gossip.is_some() {
-            let mut gossip_layers: HashMap<u8, HashSet<Arc<String>>> = Default::default();
-            let mut gossip_layer_map: HashMap<Arc<String>, u8> = Default::default();
-
-            let mut layer: HashSet<Arc<String>> = Default::default();
-            args_fingerprints.iter().for_each(|fingerprint| {
-                let fingerprint: Arc<String> = fingerprint.to_string().into();
-                layer.insert(fingerprint.clone());
-                gossip_layer_map.insert(fingerprint, 0);
-            });
-            gossip_layers.insert(0, layer);
-
-            let mut i: u8 = 0;
-
-            while let Some(last_layer) = gossip_layers.get(&i) {
-                if last_layer.is_empty() {
-                    break;
-                }
-                i += 1;
-
-                let mut layer: HashSet<Arc<String>> = Default::default();
-                last_layer.iter().for_each(|fingerprint| {
-                    key_set.get(fingerprint).inspect(|cert| {
-                        cert.user_ids.iter().for_each(|(_, pgp_uid)| {
-                            pgp_uid.sig_vec.iter().for_each(|sig| {
-                                if !gossip_layer_map.contains_key(&sig.fingerprint) {
-                                    layer.insert(sig.fingerprint.clone().into());
-                                    gossip_layer_map.insert(sig.fingerprint.clone().into(), i);
-                                }
-                            })
-                        })
-                    });
-                });
-
-                if layer.is_empty() {
-                    break;
-                }
-                gossip_layers.insert(i, layer);
             }
 
-            key_set = key_set.into_iter().filter_map(|(fingerprint, pgp_key)| {
-                if let Some(layer) = gossip_layer_map.get(&fingerprint) {
-                    let gossip = args.gossip.unwrap_or(0);
-                    if gossip == 0 || layer <= &gossip {
-                        Some((fingerprint, pgp_key))
+            let filtered_certs: Vec<(Fingerprint, Cert)> = certs
+                .into_iter()
+                .filter(|(fingerprint, _)| {
+                    if draw_options.processor.gossip.is_none()
+                        && !args_import_is_none
+                        && !input_fingerprints.is_empty()
+                    {
+                        input_fingerprints.contains(fingerprint)
                     } else {
-                        None
+                        true
                     }
-                } else {
-                    None
-                }
-            }).collect();
+                })
+                .collect();
 
-            GOSSIP_LAYER_MAP.set(gossip_layer_map).unwrap();
-        }
+            let key_set = build_key_set(filtered_certs);
 
-        KEY_SET_MAP.set(key_set.clone()).unwrap();
+            if draw_options.processor.gossip.is_some() {
+                let (key_set_filtered, gossip_layer_map) = pgp_sig2dot::gossip::build_gossip_layers(
+                    draw_options.processor.gossip.unwrap_or(0),
+                    &input_fingerprints,
+                    key_set,
+                );
+                KEY_SET_MAP.set(key_set_filtered).unwrap();
+                GOSSIP_LAYER_MAP.set(gossip_layer_map).unwrap();
+            }
 
-        debug!(
-            "{}",
-            serde_json::to_string(&key_set).unwrap_or_else(|e| e.to_string())
-        );
+            let key_set = KEY_SET_MAP.get().unwrap();
 
-        let mut graph: DiGraphMap<GraphNodeUid, &OpenPgpSig> = DiGraphMap::new();
+            debug!(
+                "{}",
+                serde_json::to_string(&key_set).unwrap_or_else(|e| e.to_string())
+            );
 
-        key_set.iter().for_each(|(_, pgp_key)| {
-            pgp_key.user_ids.iter().for_each(|(_, pgp_uid)| {
-                if !pgp_uid.is_primary && args.show_primary_uid_only {
-                    return;
-                }
-                graph.add_node(pgp_uid.into());
+            let mut graph: DiGraphMap<GraphNodeUid, &OpenPgpSig> = DiGraphMap::new();
+
+            key_set.iter().for_each(|(_, pgp_key)| {
+                pgp_key.user_ids.iter().for_each(|(_, pgp_uid)| {
+                    if !pgp_uid.is_primary && draw_options.show_primary_uid_only {
+                        return;
+                    }
+                    graph.add_node(pgp_uid.into());
+                });
             });
-        });
 
-        key_set.iter().for_each(|(_, pgp_key)| {
-            pgp_key.user_ids.iter().for_each(|(_, pgp_uid)| {
-                if !pgp_uid.is_primary && args.show_primary_uid_only {
-                    return;
-                }
-                pgp_uid.sig_vec.iter().for_each(|sig| {
-                    key_set.get(&sig.fingerprint).inspect(|key_id| {
-                        key_id.user_ids.get(&key_id.primary_user_id).inspect(|sig_uid| {
-                            if !args.show_self_sigs && sig_uid.uid == pgp_uid.uid {
-                                return;
-                            }
-                            graph.add_edge(sig_uid.into(), pgp_uid.into(), sig);
+            key_set.iter().for_each(|(_, pgp_key)| {
+                pgp_key.user_ids.iter().for_each(|(_, pgp_uid)| {
+                    if !pgp_uid.is_primary && draw_options.show_primary_uid_only {
+                        return;
+                    }
+                    pgp_uid.sig_vec.iter().for_each(|sig| {
+                        key_set.get(&sig.fingerprint).inspect(|key_id| {
+                            key_id
+                                .user_ids
+                                .get(&key_id.primary_user_id)
+                                .inspect(|sig_uid| {
+                                    if !draw_options.show_self_sigs && sig_uid.uid == pgp_uid.uid {
+                                        return;
+                                    }
+                                    graph.add_edge(sig_uid.into(), pgp_uid.into(), sig);
+                                });
                         });
                     });
+                })
+            });
+
+            let nodes_to_remove: Vec<GraphNodeUidOwned>;
+            let nodes_to_remove_2: Vec<GraphNodeUidOwned>;
+
+            if draw_options.processor.trust_root.is_some() {
+                let trust_roots: HashSet<GraphNodeUid> = graph
+                    .nodes()
+                    .filter(|node| input_trust_roots.contains(node.fingerprint))
+                    .collect();
+                let args_fingerprints_string: HashSet<String> =
+                    input_fingerprints.iter().map(|v| v.to_string()).collect();
+                let gossip_targets: HashSet<GraphNodeUid> = graph
+                    .nodes()
+                    .filter(|node| args_fingerprints_string.contains(node.fingerprint))
+                    .collect();
+
+                let mut graph_without_trust_roots: DiGraphMap<
+                    GraphNodeUid,
+                    &OpenPgpSig,
+                    RandomState,
+                > = graph.clone();
+                trust_roots.iter().for_each(|root| {
+                    graph_without_trust_roots.remove_node(*root);
                 });
-            })
-        });
 
-        let nodes_to_remove: Vec<GraphNodeUidOwned>;
-        let nodes_to_remove_2: Vec<GraphNodeUidOwned>;
+                let mut graph_without_targets: DiGraphMap<GraphNodeUid, &OpenPgpSig, RandomState> =
+                    graph.clone();
+                gossip_targets.iter().for_each(|target| {
+                    graph_without_targets.remove_node(*target);
+                });
 
-        if CLI_ARGS.get().unwrap().trust_root.is_some() {
-            let trust_roots: HashSet<GraphNodeUid> = graph.nodes().filter(|node| {
-                args_trust_roots.contains(node.fingerprint)
-            }).collect();
-            let args_fingerprints_string: HashSet<String> = args_fingerprints.iter().map(|v| v.to_string()).collect();
-            let gossip_targets: HashSet<GraphNodeUid> = graph.nodes().filter(|node| {
-                args_fingerprints_string.contains(node.fingerprint)
-            }).collect();
+                let mut space_without_trust_roots = DfsSpace::new(&graph_without_trust_roots);
+                let mut space_without_targets = DfsSpace::new(&graph_without_targets);
 
-            let mut graph_without_trust_roots: DiGraphMap<GraphNodeUid, &OpenPgpSig> = graph.clone();
-            trust_roots.iter().for_each(|root| {
-                graph_without_trust_roots.remove_node(*root);
-            });
+                nodes_to_remove = graph
+                    .nodes()
+                    .filter(|node| {
+                        if trust_roots.contains(node) || gossip_targets.contains(node) {
+                            return false;
+                        }
+                        let mut has_from = false;
+                        for root in trust_roots.iter() {
+                            if has_path_connecting(
+                                &graph_without_targets,
+                                *root,
+                                *node,
+                                Some(&mut space_without_targets),
+                            ) {
+                                has_from = true;
+                                info!("Found path from {root:?} to {node:?}");
+                                break;
+                            }
+                        }
+                        if !has_from {
+                            info!("Remove node due to not from trust roots: {node:?}");
+                            return true;
+                        }
+                        let mut has_to = false;
+                        for target in gossip_targets.iter() {
+                            if has_path_connecting(
+                                &graph_without_trust_roots,
+                                *node,
+                                *target,
+                                Some(&mut space_without_trust_roots),
+                            ) {
+                                has_to = true;
+                                info!("Found path from {node:?} to {target:?}");
+                                break;
+                            }
+                        }
+                        if !has_to {
+                            info!("Remove node due to not to targets: {node:?}");
+                            return true;
+                        }
+                        false
+                    })
+                    .map(|node| GraphNodeUidOwned {
+                        fingerprint: node.fingerprint.to_string(),
+                        uid: node.uid.to_string(),
+                    })
+                    .collect();
 
-            let mut graph_without_targets: DiGraphMap<GraphNodeUid, &OpenPgpSig> = graph.clone();
-            gossip_targets.iter().for_each(|target| {
-                graph_without_targets.remove_node(*target);
-            });
+                nodes_to_remove.iter().for_each(|node| {
+                    graph.remove_node(node.into());
+                });
 
-            let mut space_without_trust_roots = DfsSpace::new(&graph_without_trust_roots);
-            let mut space_without_targets = DfsSpace::new(&graph_without_targets);
+                nodes_to_remove_2 = graph
+                    .nodes()
+                    .filter(|node| {
+                        if !trust_roots.contains(node) && !gossip_targets.contains(node) {
+                            return false;
+                        }
+                        if trust_roots.contains(node) {
+                            let mut has_neighbor_outside = false;
+                            for neighbor in graph.neighbors(*node) {
+                                if !trust_roots.contains(&neighbor) {
+                                    has_neighbor_outside = true;
+                                    break;
+                                }
+                            }
+                            if !has_neighbor_outside {
+                                info!(
+                                    "Remove node due to no neighbor outside trust roots: {node:?}"
+                                );
+                                return true;
+                            }
+                        }
+                        false
+                    })
+                    .map(|node| GraphNodeUidOwned {
+                        fingerprint: node.fingerprint.to_string(),
+                        uid: node.uid.to_string(),
+                    })
+                    .collect();
 
-            nodes_to_remove = graph.nodes().filter(|node| {
-                if trust_roots.contains(node) || gossip_targets.contains(node) {
-                    return false;
-                }
-                let mut has_from = false;
-                for root in trust_roots.iter() {
-                    if has_path_connecting(&graph_without_targets, *root, *node, Some(&mut space_without_targets)) {
-                        has_from = true;
-                        info!("Found path from {:?} to {:?}", root, node);
-                        break;
-                    }
-                }
-                if !has_from {
-                    info!("Remove node due to not from trust roots: {:?}", node);
-                    return true;
-                }
-                let mut has_to = false;
-                for target in gossip_targets.iter() {
-                    if has_path_connecting(&graph_without_trust_roots, *node, *target, Some(&mut space_without_trust_roots)) {
-                        has_to = true;
-                        info!("Found path from {:?} to {:?}", node, target);
-                        break;
-                    }
-                }
-                if !has_to {
-                    info!("Remove node due to not to targets: {:?}", node);
-                    return true;
-                }
-                false
-            }).map(|node| GraphNodeUidOwned {
-                fingerprint: node.fingerprint.to_string(),
-                uid: node.uid.to_string(),
-            }).collect();
+                nodes_to_remove_2.iter().for_each(|node| {
+                    graph.remove_node(node.into());
+                });
+            }
 
-            nodes_to_remove.iter().for_each(|node| {
-                graph.remove_node(node.into());
-            });
-
-            nodes_to_remove_2 = graph.nodes().filter(|node| {
-                if !trust_roots.contains(node) && !gossip_targets.contains(node) {
-                    return false;
-                }
-                if trust_roots.contains(node) {
-                    let mut has_neighbor_outside = false;
-                    for neighbor in graph.neighbors(*node) {
-                        if !trust_roots.contains(&neighbor) {
-                            has_neighbor_outside = true;
-                            break;
+            let binding = &|_, (_, uid)| {
+                let mut attr = get_pgp_uid_by_node_uid(&KEY_SET_MAP, uid)
+                    .map(|v| if v.is_revoked { " color = red " } else { "" })
+                    .unwrap_or("")
+                    .to_string();
+                if draw_options.processor.gossip.is_some() {
+                    if let Some(map) = GOSSIP_LAYER_MAP.get() {
+                        if let Some(layer) = map.get(&uid.fingerprint.to_string()) {
+                            if *layer == 0 {
+                                attr += " root = true ";
+                            }
                         }
                     }
-                    if !has_neighbor_outside {
-                        info!("Remove node due to no neighbor outside trust roots: {:?}", node);
-                        return true;
-                    }
                 }
-                false
-            }).map(|node| GraphNodeUidOwned {
-                fingerprint: node.fingerprint.to_string(),
-                uid: node.uid.to_string(),
-            }).collect();
+                attr
+            };
 
-            nodes_to_remove_2.iter().for_each(|node| {
-                graph.remove_node(node.into());
-            });
+            let dot = Dot::with_attr_getters(
+                &graph,
+                &[],
+                &|_, (_, _, sig)| {
+                    (if sig.sig_type == SigType::Revoke {
+                        " color = red "
+                    } else {
+                        ""
+                    })
+                    .to_string()
+                },
+                binding,
+            );
+
+            let content = lazy_format!(|f| dot.graph_fmt(f, graph_node_uid_fmt, open_pgp_sig_fmt));
+            println!("{content}");
+
+            Ok(())
         }
+        Commands::Fetch { fetch_options } => {
+            let mut fetch_sources: HashSet<FetchSource> =
+                fetch_options.from.iter().cloned().collect();
+            if fetch_sources.contains(&FetchSource::All) {
+                fetch_sources = vec![
+                    FetchSource::Github,
+                    FetchSource::KeyServer,
+                    FetchSource::Wkd,
+                ]
+                .into_iter()
+                .collect();
+            };
 
+            if fetch_sources.contains(&FetchSource::KeyServer) {
+                let key_handle: Option<KeyHandle> = fetch_options
+                    .input
+                    .clone()
+                    .parse()
+                    .or_warn("Parsing key handle failed");
 
-
-        let binding = &|_, (_, uid)| {
-            let mut attr = get_pgp_uid_by_node_uid(uid).map(|v| {
-                if v.is_revoked { " color = red " } else { "" }
-            }).unwrap_or("").to_string();
-            if args.gossip.is_some() {
-                if let Some(map) = GOSSIP_LAYER_MAP.get() {
-                    if let Some(layer) = map.get(&uid.fingerprint.to_string()) {
-                        if *layer == 0 {
-                            attr += " root = true ";
-                        }
-                    }
+                for keyserver_addr in fetch_options.keyserver.iter() {
+                    info!("Fetching from keyserver: {keyserver_addr}");
+                    KeyServer::new(keyserver_addr).with_context(|| format!("While creating keyserver with address: {keyserver_addr}")).ok_or_warn("Fetch", |keyserver: KeyServer| {
+                        futures::executor::block_on(async {
+                            let result = if let Some(key_handle) = key_handle.clone() {
+                                keyserver.get(key_handle).await.with_context(|| format!("While fetching by KeyHandle from keyserver: {keyserver_addr}"))
+                            } else {
+                                keyserver.search(fetch_options.input.clone()).await.with_context(|| format!("While searching by UserID from keyserver: {keyserver_addr}"))
+                            };
+                            print_certs(result);
+                            Ok::<(), anyhow::Error>(())
+                        })
+                    });
                 }
             }
-            attr
-        };
 
-        let dot = Dot::with_attr_getters(&graph, &[], &|_, (_, _, sig)|
-            (if sig.sig_type == SigType::Revoke { " color = red " } else { "" }).to_string(), binding);
-        let content = format!("{}", dot);
-        println!("{}", content);
+            let reqwest_client = reqwest::Client::new();
 
-        Ok(())
-    })()
-        .map_or_else(
-            |e| -> i32 {
-                error!("{:#}", e);
-                exit(1)
-            },
-            |_| exit(0),
-        );
+            if validate_email(&fetch_options.input) {
+                if fetch_sources.contains(&FetchSource::Wkd) {
+                    info!("Input is a valid email, try fetching from Web Key Directory");
+
+                    let certs = wkd::get(&reqwest_client, fetch_options.input.clone())
+                        .await
+                        .with_context(|| {
+                            format!(
+                                "While fetching from Web Key Directory for email: {}",
+                                fetch_options.input
+                            )
+                        });
+                    print_certs(certs);
+                }
+
+                if fetch_sources.contains(&FetchSource::Github) {
+                    info!("Input is a valid email, try fetching from GitHub");
+
+                    let mut author: Option<String> = async {
+                        let body = github_api(&reqwest_client, format!("https://api.github.com/search/commits?q=author-email:{}&per_page=1&page=0", fetch_options.input))?;
+
+                        trace!("GitHub API response body: {}", body);
+
+                        let json: serde_json::Value = serde_json::from_str(&body)
+                            .with_context(|| "While parsing GitHub API response as JSON")?;
+
+                        json["total_count"].as_u64().inspect(|count_str| info!("GitHub search commits for email {} authored total count: {}", fetch_options.input, count_str));
+
+                        let author = json["items"][0]["author"]["login"]
+                            .as_str()
+                            .ok_or_else(|| anyhow!("No author found for the given email"))?;
+
+                        Ok::<String, anyhow::Error>(author.to_string())
+                    }.await.or_warn("Searching Github");
+
+                    async {
+                            let body = github_api(&reqwest_client, format!("https://api.github.com/search/commits?q=committer-email:{}&per_page=1&page=0", fetch_options.input))?;
+
+                            trace!("GitHub API response body: {}", body);
+
+                            let json: serde_json::Value = serde_json::from_str(&body)
+                                .with_context(|| "While parsing GitHub API response as JSON")?;
+
+                            json["total_count"].as_u64().inspect(|count_str| info!("GitHub search commits for email {} committed total count: {}", fetch_options.input, count_str));
+
+                        if author.is_none() {
+                            author = Some(json["items"][0]["committer"]["login"]
+                                .as_str()
+                                .ok_or_else(|| anyhow!("No user found for the given email"))?.to_string());
+                        }
+
+                        Ok::<(), anyhow::Error>(())
+                        }.await.or_warn("Searching Github");
+
+                    if let Some(author) = author {
+                        info!("Found GitHub user: {}", author);
+                        async {
+                            let body = github_api(
+                                &reqwest_client,
+                                format!("https://api.github.com/users/{}/gpg_keys", author),
+                            )?;
+
+                            trace!("GitHub GPG keys response body: {}", body);
+
+                            parse_github_gpg(body)?;
+
+                            Ok::<(), anyhow::Error>(())
+                        }
+                        .await
+                        .with_context(|| {
+                            format!("While fetching GPG keys from GitHub for user: {}", author)
+                        })
+                        .or_warn("Fetching GitHub");
+                    }
+                }
+            } else {
+                info!(
+                    "Input is not a valid email, skip fetching from Web Key Directory, try searching from GitHub by username"
+                );
+
+                async {
+                    let body = github_api(
+                        &reqwest_client,
+                        format!(
+                            "https://api.github.com/users/{}/gpg_keys",
+                            fetch_options.input
+                        ),
+                    )?;
+
+                    trace!("GitHub GPG keys response body: {}", body);
+
+                    parse_github_gpg(body)?;
+
+                    Ok::<(), anyhow::Error>(())
+                }
+                .await
+                .with_context(|| {
+                    format!(
+                        "While fetching GPG keys from GitHub for user: {}",
+                        fetch_options.input
+                    )
+                })
+                .or_warn("Fetching GitHub");
+            }
+            Ok(())
+        }
+    }
+}
+
+fn parse_github_gpg(body: String) -> Result<(), anyhow::Error> {
+    let json: serde_json::Value = serde_json::from_str(body.as_str())
+        .with_context(|| "While parsing GitHub GPG keys response as JSON")?;
+
+    if let Some(keys) = json.as_array() {
+        let mut certs: Vec<Result<Cert, anyhow::Error>> = Vec::new();
+        for key in keys {
+            if let Some(armored_key) = key["raw_key"].as_str() {
+                let cert = Cert::from_bytes(armored_key.as_bytes())
+                    .with_context(|| "Parsing GitHub response");
+                certs.push(cert);
+            }
+        }
+        print_certs(Ok(certs));
+    }
+
+    Ok(())
+}
+
+fn print_certs(certs: Result<Vec<Result<Cert, anyhow::Error>>, anyhow::Error>) {
+    match certs {
+        Ok(certs) => {
+            for cert in certs {
+                (|| -> anyhow::Result<String> {
+                    Ok(String::from_utf8(cert?.armored().to_vec()?)?)
+                })()
+                .with_context(|| "While converting armored cert to string")
+                .print_or_warn("");
+            }
+        }
+        Err(e) => {
+            warn!("{:#}", e);
+        }
+    }
+}
+
+fn github_api(reqwest_client: &reqwest::Client, url: String) -> Result<String, anyhow::Error> {
+    futures::executor::block_on(async {
+        reqwest_client
+            .get(url)
+            .header("Accept", "application/vnd.github+json")
+            .header(
+                "User-Agent",
+                format!("pgp-sig2dot-cli/{}", crate_version!()),
+            )
+            .send()
+            .await?
+            .text()
+            .await
+            .with_context(|| "While searching user email from GitHub API")
+    })
 }

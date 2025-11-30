@@ -1,139 +1,112 @@
-use crate::structure::{GraphNodeUid, OpenPgpUid, OpenPgpUidLayer};
-use crate::{CLI_ARGS, KEY_SET_MAP};
+use crate::helper::{SuppressErrors, SuppressResultOk, SuppressResultOkOrDefault};
+use crate::structure::{OpenPgpKey, OpenPgpSig, OpenPgpUid};
 use anyhow::{anyhow, Context};
 use log::{info, trace, warn};
-use sequoia_net::KeyServer;
+use sequoia_openpgp::packet::Signature;
+use sequoia_openpgp::policy::StandardPolicy;
 use sequoia_openpgp::{Cert, Fingerprint};
-use serde::Serialize;
-use std::collections::{HashMap, HashSet};
-use std::default::Default;
-use std::fmt::Formatter;
-use std::sync::OnceLock;
+use sequoia_wot::{CertSynopsis, RevocationStatus, UserIDSynopsis};
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
-pub(crate) fn get_pgp_uid_by_node_uid<'a>(uid: &'a GraphNodeUid) -> Option<&'a OpenPgpUid> {
-    KEY_SET_MAP
-        .get()
-        .and_then(|v| {
-            v.get(&uid.fingerprint.to_string())
-                .map(|v| v.user_ids.get(&<&str as Into<String>>::into(uid.uid)))
+pub fn build_key_set(certs: Vec<(Fingerprint, Cert)>) -> HashMap<Arc<String>, OpenPgpKey> {
+    let policy = StandardPolicy::new();
+    certs.into_iter().filter_map(|(_, cert)| {
+            cert.with_policy(&policy, SystemTime::now())
+                .with_context(|| anyhow!("While checking cert policy {}", cert))
+                .ok_or_warn(
+                    "Error while checking cert policy",
+                    |cert| {
+                        let cert_synopsis: CertSynopsis = cert.clone().into();
+                        let id = Arc::new(cert_synopsis.fingerprint().to_string());
+                        let primary_id = Arc::new(cert.primary_userid().map(|v| v.userid().to_string()).unwrap_or_default());
+                        Ok::<(Arc<String>, OpenPgpKey), String>((
+                            id.clone(),
+                            OpenPgpKey {
+                                id: id.clone(),
+                                is_revoked: cert_synopsis.revocation_status()
+                                    != RevocationStatus::NotAsFarAsWeKnow,
+                                is_expired: cert_synopsis
+                                    .expiration_time()
+                                    .map_or_else(|| false, |v| v < SystemTime::now()),
+                                user_ids: cert
+                                    .userids()
+                                    .map(|user_id| {
+                                        let user_id_synopsis: UserIDSynopsis =
+                                            user_id.clone().into();
+                                        trace!("{user_id:#?}");
+                                        let uid = Arc::new(user_id.userid().to_string());
+                                        (uid.clone(), OpenPgpUid {
+                                            fingerprint: id.clone(),
+                                            uid: uid.clone(),
+                                            name: user_id.userid().name()
+                                                .with_context(|| anyhow!("While getting user ID name: {:?}", user_id))
+                                                .ok_or_warn_default(
+                                                    "Invalid Name",
+                                                    |v: &str| Ok::<String, String>(v.to_string())
+                                                ),
+                                            email: user_id.userid().email()
+                                                .with_context(|| anyhow!("While getting user ID email: {:?}", user_id))
+                                                .ok_or_warn_default(
+                                                    "Invalid Email",
+                                                    |v: &str| Ok::<String, String>(v.to_string())
+                                                ),
+                                            comment: user_id.userid().comment()
+                                                .with_context(|| anyhow!("While getting user ID comment: {:?}", user_id))
+                                                .ok_or_warn_default(
+                                                    "Invalid Comment",
+                                                    |v: &str| Ok::<String, String>(v.to_string())
+                                                ),
+                                            sig_vec: user_id
+                                                .signatures()
+                                                .filter_map(|sig| {
+                                                    Some(OpenPgpSig {
+                                                        fingerprint: find_fingerprint_in_sig(sig),
+                                                        uid: sig.signers_user_id().map_or_else(|| {
+                                                            "".to_string()
+                                                        }, |v| String::from_utf8(Vec::from(v)).unwrap_or_else(|e| {
+                                                            warn!("Invalid Signer User ID: {:#}", e);
+                                                            "".to_string()
+                                                        })),
+                                                        trust_level: sig.trust_signature().unwrap_or((0, 0)).0,
+                                                        trust_value: sig.trust_signature().unwrap_or((0, 0)).1.into(),
+                                                        sig_type: sig.typ().into(),
+                                                        creation_time: sig.signature_creation_time()?.duration_since(UNIX_EPOCH).ok()?.as_secs(),
+                                                    })
+                                                })
+                                                .collect(),
+                                            is_revoked: user_id_synopsis.revocation_status()
+                                                != RevocationStatus::NotAsFarAsWeKnow,
+                                            is_primary: user_id.userid().to_string() == *primary_id,
+                                        })
+                                    })
+                                    .collect(),
+                                primary_user_id: primary_id.clone(),
+                            },
+                        ))
+                    },
+                )
         })
-        .flatten()
+        .collect()
 }
 
-pub(crate) fn simple_output<T>(object: &T, f: &mut Formatter<'_>, or: &String) -> std::fmt::Result
-where
-    T: Serialize,
-{
-    let simple_output = CLI_ARGS.get().map(|args| args.simple).unwrap_or(false);
-    if !simple_output {
-        write!(
-            f,
-            "{}",
-            serde_json::to_string(object).unwrap_or_else(|e| format!("{}", e))
-        )
-    } else {
-        write!(f, "{}", or)
-    }
-}
-
-pub(crate) fn complex_output(
-    object: &OpenPgpUid,
-    f: &mut Formatter<'_>,
-    or: &String,
-) -> std::fmt::Result {
-    let gossip_output = CLI_ARGS
-        .get()
-        .map(|args| args.gossip)
-        .unwrap_or(None)
-        .is_some();
-    if gossip_output {
-        simple_output(&<&OpenPgpUid as Into<OpenPgpUidLayer>>::into(object), f, or)
-    } else {
-        simple_output(object, f, or)
-    }
-}
-
-pub(crate) fn fetch_cert_from_keyserver(
-    keyserver: &KeyServer,
-    fingerprint: &Fingerprint,
-) -> anyhow::Result<Cert> {
-    info!("Fetching key: {}", fingerprint);
-    futures::executor::block_on(async {
-        keyserver
-            .get(fingerprint)
-            .await
-            .and_then(|v| {
-                v.into_iter()
-                    .next()
-                    .ok_or(anyhow!("Key {} not found on keyserver", fingerprint))?
-            })
-            .with_context(|| format!("Failed to fetch key: {}", fingerprint))
-    })
-}
-
-pub(crate) fn fetch_cert_from_keyserver_once_lock(
-    keyserver_lock: &OnceLock<KeyServer>,
-    fingerprint: &Fingerprint,
-) -> anyhow::Result<Cert> {
-    match keyserver_lock.get() {
-        Some(keyserver) => fetch_cert_from_keyserver(keyserver, fingerprint),
-        None => Err(anyhow!("Keyserver is not initialized")),
-    }
-}
-
-pub(crate) fn fetch_cert_from_keyserver_recursive(
-    keyserver: &KeyServer,
-    search: &HashSet<Fingerprint>,
-    depth: u8,
-    result: &mut HashMap<Fingerprint, Cert>,
-) {
-    info!("Gossiping on depth:\t{},\t\tkeys:\t{}", depth, search.len());
-    let mut search_next_layer: HashSet<Fingerprint> = Default::default();
-    for fingerprint in search {
-        trace!("Gossiping key:\t{}\t\tdepth:\t{}", fingerprint, depth);
-        if result.contains_key(fingerprint) {
-            continue;
+fn find_fingerprint_in_sig(sig: &Signature) -> String {
+    let mut sig = sig.clone();
+    let fingerprint = sig.issuer_fingerprints().next();
+    match fingerprint {
+        Some(fingerprint) => fingerprint.to_string(),
+        None => {
+            info!(
+                "No issuer fingerprint found in signature {sig:?} , trying to add missing issuers..."
+            );
+            sig.add_missing_issuers()
+                .map_or_warn("Failed to add missing issuers", |()| {});
+            let fingerprint = sig.issuer_fingerprints().next();
+            fingerprint.ok_or_warn_default(
+                &format!("Cannot find fingerprint in signature: {sig:?}"),
+                |v| Ok::<String, String>(v.to_string()),
+            )
         }
-        match fetch_cert_from_keyserver(keyserver, fingerprint)
-            .with_context(|| format!("Gossiping key:\t{}", fingerprint))
-        {
-            Ok(cert) => {
-                result.insert(fingerprint.clone(), cert.clone());
-                let mut issuers: HashSet<Fingerprint> = Default::default();
-                for uid in cert.userids() {
-                    for sig in uid.signatures() {
-                        trace!("{:#?}", sig);
-                        issuers.extend(sig.issuer_fingerprints().cloned());
-                    }
-                }
-                info!(
-                    "Gossiping key:\t{}\t\tissuers:\t{}\tdepth:\t{}",
-                    fingerprint,
-                    issuers.len(),
-                    depth
-                );
-                if depth > 0 {
-                    search_next_layer.extend(issuers);
-                }
-            }
-            Err(err) => {
-                warn!("{:#}", err)
-            }
-        }
-    }
-    if depth > 0 {
-        fetch_cert_from_keyserver_recursive(keyserver, &search_next_layer, depth - 1, result);
-    }
-}
-
-pub(crate) fn fetch_cert_from_keyserver_once_lock_recursive(
-    keyserver_lock: &OnceLock<KeyServer>,
-    search: &HashSet<Fingerprint>,
-    depth: u8,
-    result: &mut HashMap<Fingerprint, Cert>,
-) {
-    match keyserver_lock.get() {
-        Some(keyserver) => fetch_cert_from_keyserver_recursive(keyserver, search, depth, result),
-        None => Default::default(),
     }
 }

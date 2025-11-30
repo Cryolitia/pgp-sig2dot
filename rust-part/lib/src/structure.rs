@@ -1,22 +1,19 @@
-use crate::cert::{complex_output, get_pgp_uid_by_node_uid, simple_output};
-use crate::GOSSIP_LAYER_MAP;
 use num_enum::{FromPrimitive, IntoPrimitive};
 use sequoia_openpgp::types::SignatureType;
 use serde::Serialize;
 use serialize_display_adapter_macro_derive::JsonSerializeDisplayAdapter;
 use std::borrow::Borrow;
 use std::collections::HashMap;
-use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Eq, Serialize, JsonSerializeDisplayAdapter)]
-pub(crate) struct OpenPgpKey {
-    pub(crate) id: Arc<String>,
-    pub(crate) is_revoked: bool,
-    pub(crate) is_expired: bool,
-    pub(crate) user_ids: HashMap<Arc<String>, OpenPgpUid>,
-    pub(crate) primary_user_id: Arc<String>,
+pub struct OpenPgpKey {
+    pub id: Arc<String>,
+    pub is_revoked: bool,
+    pub is_expired: bool,
+    pub user_ids: HashMap<Arc<String>, OpenPgpUid>,
+    pub primary_user_id: Arc<String>,
 }
 
 impl PartialEq for OpenPgpKey {
@@ -38,57 +35,16 @@ impl Borrow<str> for OpenPgpKey {
 }
 
 #[derive(Debug, Clone, Eq, Serialize)]
-pub(crate) struct OpenPgpUid {
-    pub(crate) fingerprint: Arc<String>,
-    pub(crate) uid: Arc<String>,
-    pub(crate) name: String,
-    pub(crate) email: String,
-    pub(crate) comment: String,
+pub struct OpenPgpUid {
+    pub fingerprint: Arc<String>,
+    pub uid: Arc<String>,
+    pub name: String,
+    pub email: String,
+    pub comment: String,
     #[serde(skip_serializing)]
-    pub(crate) sig_vec: Vec<OpenPgpSig>,
-    pub(crate) is_revoked: bool,
-    pub(crate) is_primary: bool,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub(crate) struct OpenPgpUidLayer {
-    pub(crate) fingerprint: Arc<String>,
-    pub(crate) uid: Arc<String>,
-    pub(crate) name: String,
-    pub(crate) email: String,
-    pub(crate) comment: String,
-    pub(crate) is_revoked: bool,
-    pub(crate) is_primary: bool,
-    pub(crate) layer: i16,
-}
-
-impl From<&OpenPgpUid> for OpenPgpUidLayer {
-    fn from(value: &OpenPgpUid) -> Self {
-        let layer: i16 = match GOSSIP_LAYER_MAP
-            .get()
-            .and_then(|v| v.get(&value.fingerprint))
-        {
-            None => -1,
-            Some(v) => (*v).into(),
-        };
-
-        OpenPgpUidLayer {
-            fingerprint: value.fingerprint.clone(),
-            uid: value.uid.clone(),
-            name: value.name.clone(),
-            email: value.email.clone(),
-            comment: value.comment.clone(),
-            is_revoked: value.is_revoked,
-            is_primary: value.is_primary,
-            layer,
-        }
-    }
-}
-
-impl Display for OpenPgpUid {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        simple_output(self, f, self.uid.borrow())
-    }
+    pub sig_vec: Vec<OpenPgpSig>,
+    pub is_revoked: bool,
+    pub is_primary: bool,
 }
 
 impl PartialEq for OpenPgpUid {
@@ -105,18 +61,9 @@ impl Hash for OpenPgpUid {
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize)]
-pub(crate) struct GraphNodeUid<'a> {
-    pub(crate) fingerprint: &'a str,
-    pub(crate) uid: &'a str,
-}
-
-impl Display for GraphNodeUid<'_> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match get_pgp_uid_by_node_uid(self) {
-            None => simple_output(self, f, &self.fingerprint.to_string()),
-            Some(v) => complex_output(v, f, &v.uid.to_string()),
-        }
-    }
+pub struct GraphNodeUid<'a> {
+    pub fingerprint: &'a str,
+    pub uid: &'a str,
 }
 
 pub(crate) trait OpenPgpUidKey {
@@ -233,17 +180,17 @@ impl<'a> From<&'a OpenPgpSig> for GraphNodeUid<'a> {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize)]
-pub(crate) struct OpenPgpSig {
-    pub(crate) fingerprint: String,
-    pub(crate) uid: String,
-    pub(crate) trust_level: u8,
-    pub(crate) trust_value: OpenPgpSigTrust,
-    pub(crate) sig_type: SigType,
-    pub(crate) creation_time: u64,
+pub struct OpenPgpSig {
+    pub fingerprint: String,
+    pub uid: String,
+    pub trust_level: u8,
+    pub trust_value: OpenPgpSigTrust,
+    pub sig_type: SigType,
+    pub creation_time: u64,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize)]
-pub(crate) struct GraphEdgeSig {
+pub struct GraphEdgeSig {
     pub(crate) trust_level: u8,
     pub(crate) trust_value: OpenPgpSigTrust,
     pub(crate) sig_type: SigType,
@@ -258,16 +205,6 @@ impl From<&OpenPgpSig> for GraphEdgeSig {
             sig_type: value.sig_type,
             creation_time: value.creation_time,
         }
-    }
-}
-
-impl Display for OpenPgpSig {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        simple_output(
-            &<&OpenPgpSig as Into<GraphEdgeSig>>::into(self),
-            f,
-            &self.sig_type.to_string().replace("\"", ""),
-        )
     }
 }
 
@@ -311,7 +248,7 @@ pub(crate) enum OpenPgpValidity {
     JsonSerializeDisplayAdapter,
 )]
 #[repr(u8)]
-pub(crate) enum OpenPgpSigTrust {
+pub enum OpenPgpSigTrust {
     #[default]
     None = 0,
     #[num_enum(alternatives = [1..60, 61..120])]
@@ -334,7 +271,7 @@ pub(crate) enum OpenPgpSigTrust {
     JsonSerializeDisplayAdapter,
 )]
 #[repr(u8)]
-pub(crate) enum SigType {
+pub enum SigType {
     Default = 0x10,
     NotAtAll = 0x11,
     Casual = 0x12,
@@ -358,9 +295,9 @@ impl From<SignatureType> for SigType {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize)]
-pub(crate) struct GraphNodeUidOwned {
-    pub(crate) fingerprint: String,
-    pub(crate) uid: String,
+pub struct GraphNodeUidOwned {
+    pub fingerprint: String,
+    pub uid: String,
 }
 
 impl<'a> From<&'a GraphNodeUidOwned> for GraphNodeUid<'a> {
