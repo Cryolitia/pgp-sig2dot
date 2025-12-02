@@ -1,5 +1,6 @@
 use num_enum::{FromPrimitive, IntoPrimitive};
 use sequoia_openpgp::types::SignatureType;
+use sequoia_openpgp::Cert;
 use serde::Serialize;
 use serialize_display_adapter_macro_derive::JsonSerializeDisplayAdapter;
 use std::borrow::Borrow;
@@ -7,13 +8,15 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-#[derive(Debug, Clone, Eq, Serialize, JsonSerializeDisplayAdapter)]
+#[derive(Debug, Clone, Serialize, JsonSerializeDisplayAdapter)]
 pub struct OpenPgpKey {
     pub id: Arc<String>,
     pub is_revoked: bool,
     pub is_expired: bool,
     pub user_ids: HashMap<Arc<String>, OpenPgpUid>,
     pub primary_user_id: Arc<String>,
+    #[serde(skip_serializing)]
+    pub original_cert: Arc<Cert>,
 }
 
 impl PartialEq for OpenPgpKey {
@@ -21,6 +24,8 @@ impl PartialEq for OpenPgpKey {
         self.id == other.id
     }
 }
+
+impl Eq for OpenPgpKey {}
 
 impl Hash for OpenPgpKey {
     fn hash<H: Hasher>(&self, state: &mut H) {
@@ -34,7 +39,7 @@ impl Borrow<str> for OpenPgpKey {
     }
 }
 
-#[derive(Debug, Clone, Eq, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct OpenPgpUid {
     pub fingerprint: Arc<String>,
     pub uid: Arc<String>,
@@ -45,6 +50,8 @@ pub struct OpenPgpUid {
     pub sig_vec: Vec<OpenPgpSig>,
     pub is_revoked: bool,
     pub is_primary: bool,
+    #[serde(skip_serializing)]
+    pub original_cert: Arc<Cert>,
 }
 
 impl PartialEq for OpenPgpUid {
@@ -52,6 +59,8 @@ impl PartialEq for OpenPgpUid {
         self.fingerprint == other.fingerprint && self.uid == other.uid
     }
 }
+
+impl Eq for OpenPgpUid {}
 
 impl Hash for OpenPgpUid {
     fn hash<H: Hasher>(&self, state: &mut H) {

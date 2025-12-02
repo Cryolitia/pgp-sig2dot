@@ -1,4 +1,4 @@
-use crate::cli::{Cli, Commands, DrawOptions, FetchSource, GenCommand};
+use crate::cli::{Cli, Commands, DrawOptions, FetchSource, GenCommand, OutputType};
 use crate::structure::graph_node_uid_fmt;
 use crate::structure::open_pgp_sig_fmt;
 use anyhow::{anyhow, Context};
@@ -253,12 +253,12 @@ async fn main() -> anyhow::Result<()> {
                                 Some(&mut space_without_targets),
                             ) {
                                 has_from = true;
-                                info!("Found path from {root:?} to {node:?}");
+                                debug!("Found path from {root:?} to {node:?}");
                                 break;
                             }
                         }
                         if !has_from {
-                            info!("Remove node due to not from trust roots: {node:?}");
+                            debug!("Remove node due to not from trust roots: {node:?}");
                             return true;
                         }
                         let mut has_to = false;
@@ -270,12 +270,12 @@ async fn main() -> anyhow::Result<()> {
                                 Some(&mut space_without_trust_roots),
                             ) {
                                 has_to = true;
-                                info!("Found path from {node:?} to {target:?}");
+                                debug!("Found path from {node:?} to {target:?}");
                                 break;
                             }
                         }
                         if !has_to {
-                            info!("Remove node due to not to targets: {node:?}");
+                            debug!("Remove node due to not to targets: {node:?}");
                             return true;
                         }
                         false
@@ -305,7 +305,7 @@ async fn main() -> anyhow::Result<()> {
                                 }
                             }
                             if !has_neighbor_outside {
-                                info!(
+                                debug!(
                                     "Remove node due to no neighbor outside trust roots: {node:?}"
                                 );
                                 return true;
@@ -324,39 +324,63 @@ async fn main() -> anyhow::Result<()> {
                 });
             }
 
-            let binding = &|_, (_, uid)| {
-                let mut attr = get_pgp_uid_by_node_uid(&KEY_SET_MAP, uid)
-                    .map(|v| if v.is_revoked { " color = red " } else { "" })
-                    .unwrap_or("")
-                    .to_string();
-                if draw_options.processor.gossip.is_some() {
-                    if let Some(map) = GOSSIP_LAYER_MAP.get() {
-                        if let Some(layer) = map.get(&uid.fingerprint.to_string()) {
-                            if *layer == 0 {
-                                attr += " root = true ";
+            match draw_options.output.output_type {
+                OutputType::Dot | OutputType::Metadata => {
+                    let binding = &|_, (_, uid)| {
+                        let mut attr = get_pgp_uid_by_node_uid(&KEY_SET_MAP, uid)
+                            .map(|v| if v.is_revoked { " color = red " } else { "" })
+                            .unwrap_or("")
+                            .to_string();
+                        if draw_options.processor.gossip.is_some() {
+                            if let Some(map) = GOSSIP_LAYER_MAP.get() {
+                                if let Some(layer) = map.get(&uid.fingerprint.to_string()) {
+                                    if *layer == 0 {
+                                        attr += " root = true ";
+                                    }
+                                }
                             }
                         }
-                    }
+                        attr
+                    };
+
+                    let dot = Dot::with_attr_getters(
+                        &graph,
+                        &[],
+                        &|_, (_, _, sig)| {
+                            (if sig.sig_type == SigType::Revoke {
+                                " color = red "
+                            } else {
+                                ""
+                            })
+                            .to_string()
+                        },
+                        binding,
+                    );
+
+                    let content =
+                        lazy_format!(|f| dot.graph_fmt(f, graph_node_uid_fmt, open_pgp_sig_fmt));
+                    println!("{content}");
                 }
-                attr
-            };
-
-            let dot = Dot::with_attr_getters(
-                &graph,
-                &[],
-                &|_, (_, _, sig)| {
-                    (if sig.sig_type == SigType::Revoke {
-                        " color = red "
-                    } else {
-                        ""
-                    })
-                    .to_string()
-                },
-                binding,
-            );
-
-            let content = lazy_format!(|f| dot.graph_fmt(f, graph_node_uid_fmt, open_pgp_sig_fmt));
-            println!("{content}");
+                OutputType::KeyBlock => {
+                    let certs = graph
+                        .nodes()
+                        .filter_map(|v| {
+                            get_pgp_uid_by_node_uid(&KEY_SET_MAP, &v).map(|uid| {
+                                (
+                                    uid.original_cert.key_handle().to_hex(),
+                                    uid.original_cert.clone(),
+                                )
+                            })
+                        })
+                        .collect::<HashMap<String, Arc<Cert>>>()
+                        .values()
+                        .map(|cert| Ok(cert.as_ref().clone()))
+                        .collect::<Vec<Result<Cert, anyhow::Error>>>();
+                    print_certs(Ok(certs));
+                }
+                // TODO
+                OutputType::Svg => {}
+            }
 
             Ok(())
         }

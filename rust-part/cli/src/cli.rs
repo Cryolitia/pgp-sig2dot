@@ -1,6 +1,6 @@
 use clap::{ArgGroup, Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
-use clap_verbosity_flag::Verbosity;
+use clap_verbosity_flag::{InfoLevel, Verbosity};
 use clio::ClioPath;
 
 #[derive(Parser, Debug, Clone)]
@@ -10,7 +10,7 @@ pub struct Cli {
     pub(crate) command: Commands,
 
     #[command(flatten)]
-    pub(crate) verbose: Verbosity,
+    pub(crate) verbose: Verbosity<InfoLevel>,
 }
 
 #[derive(clap::Args, Debug, Clone, Default)]
@@ -44,7 +44,6 @@ pub struct Input {
     pub(crate) keyserver: String,
 }
 
-/// _TODO_
 #[derive(Debug, Clone, Default, ValueEnum, PartialEq)]
 #[clap(rename_all = "SCREAMING_SNAKE_CASE")]
 pub(crate) enum OutputType {

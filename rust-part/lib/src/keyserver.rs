@@ -1,6 +1,6 @@
 use crate::helper::SuppressErrors;
 use anyhow::{anyhow, Context};
-use log::{info, trace};
+use log::{debug, info, trace};
 use sequoia_net::KeyServer;
 use sequoia_openpgp::{Cert, Fingerprint};
 use std::collections::{HashMap, HashSet};
@@ -58,7 +58,7 @@ pub(crate) fn fetch_cert_from_keyserver_recursive(
                         let mut sig = sig.clone();
                         trace!("{sig:#?}");
                         if sig.issuer_fingerprints().collect::<Vec<_>>().is_empty() {
-                            info!("No issuer fingerprint found in signature {sig:?} , trying to add missing issuers...");
+                            debug!("No issuer fingerprint found in signature {sig:?} , trying to add missing issuers...");
                             sig.add_missing_issuers().map_or_warn("Failed to add missing issuers", |()|{});
                         }
                         issuers.extend(sig.issuer_fingerprints().cloned());

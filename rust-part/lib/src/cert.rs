@@ -1,7 +1,7 @@
 use crate::helper::{SuppressErrors, SuppressResultOk, SuppressResultOkOrDefault};
 use crate::structure::{OpenPgpKey, OpenPgpSig, OpenPgpUid};
 use anyhow::{anyhow, Context};
-use log::{info, trace, warn};
+use log::{debug, trace, warn};
 use sequoia_openpgp::packet::Signature;
 use sequoia_openpgp::policy::StandardPolicy;
 use sequoia_openpgp::{Cert, Fingerprint};
@@ -12,15 +12,16 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub fn build_key_set(certs: Vec<(Fingerprint, Cert)>) -> HashMap<Arc<String>, OpenPgpKey> {
     let policy = StandardPolicy::new();
-    certs.into_iter().filter_map(|(_, cert)| {
-            cert.with_policy(&policy, SystemTime::now())
-                .with_context(|| anyhow!("While checking cert policy {}", cert))
+    certs.into_iter().filter_map(|(_, original_cert)| {
+            original_cert.with_policy(&policy, SystemTime::now())
+                .with_context(|| anyhow!("While checking cert policy {}", original_cert))
                 .ok_or_warn(
                     "Error while checking cert policy",
                     |cert| {
                         let cert_synopsis: CertSynopsis = cert.clone().into();
                         let id = Arc::new(cert_synopsis.fingerprint().to_string());
                         let primary_id = Arc::new(cert.primary_userid().map(|v| v.userid().to_string()).unwrap_or_default());
+                        let original_cert = Arc::new(original_cert.clone());
                         Ok::<(Arc<String>, OpenPgpKey), String>((
                             id.clone(),
                             OpenPgpKey {
@@ -79,10 +80,12 @@ pub fn build_key_set(certs: Vec<(Fingerprint, Cert)>) -> HashMap<Arc<String>, Op
                                             is_revoked: user_id_synopsis.revocation_status()
                                                 != RevocationStatus::NotAsFarAsWeKnow,
                                             is_primary: user_id.userid().to_string() == *primary_id,
+                                            original_cert: original_cert.clone(),
                                         })
                                     })
                                     .collect(),
                                 primary_user_id: primary_id.clone(),
+                                original_cert: original_cert.clone(),
                             },
                         ))
                     },
@@ -97,7 +100,7 @@ fn find_fingerprint_in_sig(sig: &Signature) -> String {
     match fingerprint {
         Some(fingerprint) => fingerprint.to_string(),
         None => {
-            info!(
+            debug!(
                 "No issuer fingerprint found in signature {sig:?} , trying to add missing issuers..."
             );
             sig.add_missing_issuers()
