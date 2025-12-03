@@ -378,8 +378,6 @@ async fn main() -> anyhow::Result<()> {
                         .collect::<Vec<Result<Cert, anyhow::Error>>>();
                     print_certs(Ok(certs));
                 }
-                // TODO
-                OutputType::Svg => {}
             }
 
             Ok(())

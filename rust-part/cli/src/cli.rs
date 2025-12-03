@@ -18,7 +18,7 @@ pub struct Cli {
 #[clap(group(
             ArgGroup::new("input")
                 .required(true)
-                .args(&["import", "online"])
+                .args(&["import", "online", "keyserver"])
                 .multiple(true),
 ))]
 pub struct Input {
@@ -53,19 +53,6 @@ pub(crate) enum OutputType {
     Metadata,
     /// OpenPGP key block format can be imported to GnuPG, etc.
     KeyBlock,
-    Svg,
-}
-
-/// _TODO_
-#[derive(Debug, Clone, Default, ValueEnum, PartialEq)]
-pub(crate) enum OutputLayout {
-    /// Choose the default layout algorithm
-    #[default]
-    Default,
-    /// Nodes are placed on concentric circles
-    Twopi,
-    /// Force-directed graph drawing algorithm
-    Fdp,
 }
 
 #[derive(clap::Args, Debug, Clone, Default)]
@@ -73,7 +60,7 @@ pub(crate) enum OutputLayout {
 #[clap(group(
             ArgGroup::new("output")
                 .required(false)
-                .args(&["output_type", "output_layout"])
+                .args(&["output_type"])
                 .multiple(true),
 ))]
 pub struct Output {
@@ -81,11 +68,6 @@ pub struct Output {
     #[clap(group = "output")]
     #[arg(short = 't', long = "type", default_value = "DOT")]
     pub(crate) output_type: OutputType,
-
-    /// The layout algorithms to use, may be ignored under certain conditions
-    #[clap(group = "output")]
-    #[arg(long = "layout", default_value = "default")]
-    pub(crate) output_layout: OutputLayout,
 }
 
 #[derive(clap::Args, Debug, Clone, Default)]
