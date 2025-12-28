@@ -10,7 +10,7 @@ use log::{debug, info, trace, warn};
 use petgraph::algo::{has_path_connecting, DfsSpace};
 use petgraph::dot::Dot;
 use petgraph::graphmap::DiGraphMap;
-use pgp_sig2dot::cert::build_key_set;
+use pgp_sig2dot::cert::{build_key_set, insert_or_update_cert};
 use pgp_sig2dot::get_pgp_uid_by_node_uid;
 use pgp_sig2dot::github::{fetch_cert_from_github, github_api, parse_github_gpg};
 use pgp_sig2dot::helper::SuppressResultOk;
@@ -119,7 +119,7 @@ async fn main() -> anyhow::Result<()> {
                             format!("While fetching cert from keyserver: {fingerprint}")
                         })
                         .ok_or_warn("Failed to fetch cert from keyserver", |v| {
-                            certs.insert(fingerprint.clone(), v);
+                            insert_or_update_cert(&mut certs, v);
                             Ok::<(), String>(())
                         });
                 });
@@ -138,8 +138,8 @@ async fn main() -> anyhow::Result<()> {
                         gossip,
                         &mut result,
                     );
-                    result.into_iter().for_each(|(fingerprint, cert)| {
-                        certs.insert(fingerprint, cert);
+                    result.into_iter().for_each(|(_, cert)| {
+                        insert_or_update_cert(&mut certs, cert);
                     });
                 }
             }

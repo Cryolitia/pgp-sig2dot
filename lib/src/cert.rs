@@ -113,3 +113,24 @@ fn find_fingerprint_in_sig(sig: &Signature) -> String {
         }
     }
 }
+
+pub fn insert_or_update_cert(certs: &mut HashMap<Fingerprint, Cert>, new_cert: Cert) {
+    let fingerprint = new_cert.fingerprint();
+    match certs.get(&fingerprint) {
+        Some(existing_cert) => {
+            debug!("Updating cert with fingerprint {}", fingerprint);
+            existing_cert
+                .clone()
+                .merge_public(new_cert)
+                .with_context(|| format!("While merging cert for {}", existing_cert.fingerprint()))
+                .ok_or_warn("merge cert", |cert| {
+                    certs.insert(fingerprint, cert);
+                    Ok::<(), anyhow::Error>(())
+                });
+        }
+        None => {
+            debug!("Inserting new cert with fingerprint {}", fingerprint);
+            certs.insert(fingerprint, new_cert);
+        }
+    }
+}
