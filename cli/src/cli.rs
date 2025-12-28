@@ -173,7 +173,7 @@ pub(crate) enum Commands {
 #[derive(Subcommand, Debug, Clone)]
 pub(crate) enum GenCommand {
     #[command(about = "Generate manual file")]
-    ManGen {
+    Manpage {
         #[arg(help = "Output Path", long)]
         path: ClioPath,
     },

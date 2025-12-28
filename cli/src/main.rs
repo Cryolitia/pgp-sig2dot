@@ -48,7 +48,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Cli { gen_command } => {
             let cmd = Cli::command();
             match gen_command {
-                GenCommand::ManGen { path } => {
+                GenCommand::Manpage { path } => {
                     let out_dir = path.to_path_buf();
                     debug!("man: generate to{out_dir:?}");
                     create_dir_all(&out_dir)?;

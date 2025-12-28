@@ -50,9 +50,6 @@
               overlays = [ (import rust-overlay) ];
             };
             rust = (pkgs.rust-bin.stable.latest.rust.override { extensions = [ "rust-src" ]; });
-
-            pythonVersion = "python311";
-            venvPythonVersion = "python3.11";
           in
           {
             default = (
@@ -65,18 +62,6 @@
                     openssl
                     sqlite
                     gnupg
-                  ])
-                  ++ (with pkgs."${pythonVersion}Packages"; [
-                    python
-                    venvShellHook
-                    virtualenv
-
-                    dash
-                    matplotlib
-                    networkx
-                    numpy
-                    pandas
-                    pydot
                   ]);
 
                 LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
@@ -87,12 +72,6 @@
                   rustc --version
                   cargo --version
                   echo ${rust}
-
-                  echo "`${pkgs."${pythonVersion}Packages".python}/bin/python3 --version`"
-                  rm -v python-part/.venv/bin/python
-                  virtualenv --no-setuptools python-part/.venv
-                  export PATH=$PWD/python-part/.venv/bin:$PATH
-                  export PYTHONPATH=$PWD/python-part/.venv/lib/${venvPythonVersion}/site-packages/:$PYTHONPATH
 
                   exec zsh
                 '';
@@ -123,7 +102,7 @@
               inherit (self) callPackage;
             in
             {
-              pgp-sig2dot-rust-part = callPackage (
+              pgp-sig2dot = callPackage (
                 {
                   lib,
                   stdenv,
@@ -136,14 +115,16 @@
                   sqlite,
                 }:
                 rustPlatform.buildRustPackage {
-                  pname = "pgp-sig2dot-rust-part";
+                  pname = "pgp-sig2dot";
                   version = "unstable";
 
-                  src = lib.cleanSource ./rust-part;
+                  src = lib.cleanSource ./.;
 
                   cargoLock = {
-                    lockFile = ./rust-part/Cargo.lock;
+                    lockFile = ./Cargo.lock;
                   };
+
+                  buildFeatures = [ "map42" ];
 
                   nativeBuildInputs = [
                     pkg-config
@@ -159,12 +140,12 @@
 
                   postInstall = lib.optionalString (stdenv.buildPlatform.canExecute stdenv.hostPlatform) ''
                     installShellCompletion --cmd pgp-sig2dot \
-                      --bash <($out/bin/pgp-sig2dot gen complete bash) \
-                      --fish <($out/bin/pgp-sig2dot gen complete fish) \
-                      --zsh <($out/bin/pgp-sig2dot gen complete zsh)
+                      --bash <($out/bin/pgp-sig2dot cli complete bash) \
+                      --fish <($out/bin/pgp-sig2dot cli complete fish) \
+                      --zsh <($out/bin/pgp-sig2dot cli complete zsh)
 
                     mkdir -p manpage
-                    $out/bin/pgp-sig2dot gen man --path manpage
+                    $out/bin/pgp-sig2dot cli manpage --path manpage
                     installManPage manpage/*
                   '';
 
@@ -176,191 +157,28 @@
                 }
               ) { };
 
-              visdcc = callPackage (
-                {
-                  lib,
-                  python3Packages,
-                  fetchPypi,
-                }:
-                python3Packages.buildPythonPackage rec {
-                  pname = "visdcc";
-                  version = "0.0.63";
-                  pyproject = true;
-
-                  src = fetchPypi {
-                    inherit pname version;
-                    hash = "sha256-PBGyTzpjBguQ+kCyYKpyljKa5G9yOc/yDaobT3U/NAA=";
-                  };
-
-                  build-system = [ python3Packages.setuptools ];
-
-                  dependencies = with python3Packages; [ dash ];
-
-                  meta = with lib; {
-                    description = "Dash Core Components for Visualization";
-                    homepage = "https://github.com/jimmybow/visdcc";
-                    license = licenses.mit;
-                    maintainers = with maintainers; [ Cryolitia ];
-                  };
-                }
-              ) { python3Packages = pkgs.python3Packages; };
-
-              dash-bootstrap-components-legacy = callPackage (
-                { python3Packages, fetchPypi }:
-                python3Packages.buildPythonPackage rec {
-                  pname = "dash-bootstrap-components";
-                  version = "0.13.1";
-                  pyproject = true;
-
-                  src = fetchPypi {
-                    inherit pname version;
-                    hash = "sha256-BK11w3vsAFrBzA/3v7VkXz4sdarKz6ESecQy9Mg65wo=";
-                  };
-
-                  build-system = [ python3Packages.setuptools ];
-
-                  dependencies = with python3Packages; [ dash ];
-
-                  meta = python3Packages.dash-bootstrap-components.meta;
-                }
-              ) { python3Packages = pkgs.python3Packages; };
-
-              jaal = callPackage (
-                {
-                  lib,
-                  python3Packages,
-                  fetchFromGitHub,
-                  visdcc,
-                  dash-bootstrap-components-legacy,
-                }:
-                python3Packages.buildPythonPackage {
-                  pname = "jaal";
-                  version = "0.1.9";
-                  pyproject = true;
-
-                  src = fetchFromGitHub {
-                    owner = "imohitmayank";
-                    repo = "jaal";
-                    rev = "v0.1.9";
-                    hash = "sha256-BT4/4EcLgSFScjVfMF0qmhU8GMIThzUws/hWKJex8zk=";
-                  };
-
-                  build-system = [ python3Packages.setuptools ];
-
-                  doCheck = false;
-
-                  dependencies = with python3Packages; [
-                    dash
-                    pandas
-                    visdcc
-                    dash-bootstrap-components-legacy
-                  ];
-
-                  meta = with lib; {
-                    description = "Your interactive network visualizing dashboard";
-                    homepage = "https://github.com/imohitmayank/jaal";
-                    license = licenses.mit;
-                    maintainers = with maintainers; [ Cryolitia ];
-                  };
-                }
-              ) { python3Packages = pkgs.python3Packages; };
-
-              pgp-sig2dot-python-part = callPackage (
-                {
-                  lib,
-                  python3Packages,
-                  jaal,
-                }:
-                python3Packages.buildPythonApplication {
-                  pname = "pgp-sig2dot-python-part";
-                  version = "unstable";
-                  pyproject = true;
-
-                  src = lib.cleanSource ./python-part;
-
-                  build-system = [ python3Packages.setuptools ];
-
-                  dependencies = with python3Packages; [
-                    jaal
-                    matplotlib
-                    networkx
-                    pandas
-                    pydot
-                  ];
-
-                  meta = legacy-meta;
-                }
-              ) { python3Packages = pkgs.python3Packages; };
-
-              pgp-sig2dot-jaal = callPackage (
-                {
-                  writeShellApplication,
-                  pgp-sig2dot-python-part,
-                  pgp-sig2dot-rust-part,
-                }:
-                writeShellApplication {
-                  name = "pgp-sig2dot-jaal";
-                  runtimeInputs = [ pgp-sig2dot-rust-part pgp-sig2dot-rust-part ];
-                  text = ''
-                    ${pgp-sig2dot-rust-part}/bin/pgp-sig2dot "$@" | ${pgp-sig2dot-python-part}/bin/pgp-sig2dot-python-part.py --jaal
-                  '';
-                }
-              ) { };
-
-              pgp-sig2dot-networkx = callPackage (
-                {
-                  writeShellApplication,
-                  pgp-sig2dot-python-part,
-                  pgp-sig2dot-rust-part,
-                }:
-                writeShellApplication {
-                  name = "pgp-sig2dot-networkx";
-                  runtimeInputs = [ pgp-sig2dot-rust-part pgp-sig2dot-rust-part ];
-                  text = ''
-                    ${pgp-sig2dot-rust-part}/bin/pgp-sig2dot "$@" | ${pgp-sig2dot-python-part}/bin/pgp-sig2dot-python-part.py --networkx
-                  '';
-                }
-              ) { };
-
               pgp-sig2dot-graphviz = callPackage (
                 {
                   writeShellApplication,
-                  pgp-sig2dot-rust-part,
+                  pgp-sig2dot,
                   graphviz-nox,
                 }:
                 writeShellApplication {
                   name = "pgp-sig2dot-graphviz";
-                  runtimeInputs = [ pgp-sig2dot-rust-part graphviz-nox ];
+                  runtimeInputs = [ pgp-sig2dot graphviz-nox ];
                   text = ''
                     if grep -q gossip <<<"$@"; then
-                      ${pgp-sig2dot-rust-part}/bin/pgp-sig2dot --simple "$@" | ${graphviz-nox}/bin/dot -Goverlap=false -Tsvg -Ktwopi
+                      ${pgp-sig2dot}/bin/pgp-sig2dot "$@" -t DOT | ${graphviz-nox}/bin/dot -Goverlap=false -Tsvg -Ktwopi
                     else
-                      ${pgp-sig2dot-rust-part}/bin/pgp-sig2dot --simple "$@" | ${graphviz-nox}/bin/dot -Goverlap=false -Tsvg -Ksfdp
+                      ${pgp-sig2dot}/bin/pgp-sig2dot "$@" -t DOT | ${graphviz-nox}/bin/dot -Goverlap=false -Tsvg -Ksfdp
                     fi
                   '';
+                } // { meta =
+                    legacy-meta
+                    // (with lib; {
+                      mainProgram = "pgp-sig2dot-graphviz";
+                    });
                 }
-              ) { };
-
-              pgp-sig2dot = callPackage (
-                {
-                  runCommand,
-                  pgp-sig2dot-rust-part,
-                  pgp-sig2dot-python-part,
-                  pgp-sig2dot-jaal,
-                  pgp-sig2dot-networkx,
-                  pgp-sig2dot-graphviz,
-                }:
-                runCommand "pgp-sig2dot" { } ''
-                  mkdir -p $out/bin
-
-                  ln -s ${pgp-sig2dot-rust-part}/bin/pgp-sig2dot $out/bin/pgp-sig2dot
-                  ln -s ${pgp-sig2dot-python-part}/bin/pgp-sig2dot-python-part.py $out/bin/pgp-sig2dot-python-part
-                  ln -s ${pgp-sig2dot-jaal}/bin/pgp-sig2dot-jaal $out/bin/pgp-sig2dot-jaal
-                  ln -s ${pgp-sig2dot-networkx}/bin/pgp-sig2dot-networkx $out/bin/pgp-sig2dot-networkx
-                  ln -s ${pgp-sig2dot-graphviz}/bin/pgp-sig2dot-graphviz $out/bin/pgp-sig2dot-graphviz
-
-                  ln -s ${pgp-sig2dot-rust-part}/share $out/share
-                ''
               ) { };
             }
           )
