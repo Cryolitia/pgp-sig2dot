@@ -13,6 +13,9 @@ categories = ["command-line-utilities", "visualization"]
 name = "pgp-sig2dot"
 path = "src/main.rs"
 
+[features]
+map42 = [ "rustworkx-core" ]
+
 [dependencies]
 pgp-sig2dot = { path = "../lib" }
 anyhow = { version = "1.0.86", features = ["backtrace"] }
@@ -31,5 +34,7 @@ sequoia-openpgp = { version = "2.1.0", default-features = false }
 sequoia-net = "0.30.0"
 format = "0.2.4"
 futures = "0.3.31"
-validator = "0.16"
+validator = "0.20.0"
 reqwest = "0.12.24"
+serialize_display_adapter_macro_derive = "0.2.0"
+rustworkx-core = {  version = "0.17.1", optional = true }

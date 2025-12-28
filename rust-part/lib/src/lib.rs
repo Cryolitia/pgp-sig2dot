@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
 pub mod cert;
+pub mod github;
 pub mod gossip;
 pub mod helper;
 pub mod input;

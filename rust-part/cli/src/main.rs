@@ -1,8 +1,10 @@
 use crate::cli::{Cli, Commands, DrawOptions, FetchSource, GenCommand, OutputType};
+#[cfg(feature = "map42")]
+use crate::map42::print_map42;
 use crate::structure::graph_node_uid_fmt;
 use crate::structure::open_pgp_sig_fmt;
 use anyhow::{anyhow, Context};
-use clap::{crate_version, CommandFactory, Parser};
+use clap::{CommandFactory, Parser};
 use format::lazy_format;
 use log::{debug, info, trace, warn};
 use petgraph::algo::{has_path_connecting, DfsSpace};
@@ -10,13 +12,13 @@ use petgraph::dot::Dot;
 use petgraph::graphmap::DiGraphMap;
 use pgp_sig2dot::cert::build_key_set;
 use pgp_sig2dot::get_pgp_uid_by_node_uid;
+use pgp_sig2dot::github::{fetch_cert_from_github, github_api, parse_github_gpg};
 use pgp_sig2dot::helper::SuppressResultOk;
 use pgp_sig2dot::helper::{SuppressErrors, SuppressPrint, SuppressResultErrors};
 use pgp_sig2dot::input::{parse_input_fingerprints, parse_key_block};
 use pgp_sig2dot::keyserver;
 use pgp_sig2dot::structure::{GraphNodeUid, GraphNodeUidOwned, OpenPgpKey, OpenPgpSig, SigType};
 use sequoia_net::{wkd, KeyServer};
-use sequoia_openpgp::parse::Parse;
 use sequoia_openpgp::serialize::MarshalInto;
 use sequoia_openpgp::{Cert, Fingerprint, KeyHandle};
 use std::collections::{HashMap, HashSet};
@@ -25,9 +27,11 @@ use std::fs::create_dir_all;
 use std::hash::RandomState;
 use std::io::Read;
 use std::sync::{Arc, OnceLock};
-use validator::validate_email;
+use validator::ValidateEmail;
 
 mod cli;
+#[cfg(feature = "map42")]
+mod map42;
 mod structure;
 
 static DRAW_OPTIONS: OnceLock<DrawOptions> = OnceLock::new();
@@ -164,6 +168,8 @@ async fn main() -> anyhow::Result<()> {
                 );
                 KEY_SET_MAP.set(key_set_filtered).unwrap();
                 GOSSIP_LAYER_MAP.set(gossip_layer_map).unwrap();
+            } else {
+                KEY_SET_MAP.set(key_set).unwrap();
             }
 
             let key_set = KEY_SET_MAP.get().unwrap();
@@ -378,6 +384,8 @@ async fn main() -> anyhow::Result<()> {
                         .collect::<Vec<Result<Cert, anyhow::Error>>>();
                     print_certs(Ok(certs));
                 }
+                #[cfg(feature = "map42")]
+                OutputType::Map42 => print_map42(graph),
             }
 
             Ok(())
@@ -420,7 +428,7 @@ async fn main() -> anyhow::Result<()> {
 
             let reqwest_client = reqwest::Client::new();
 
-            if validate_email(&fetch_options.input) {
+            if fetch_options.input.validate_email() {
                 if fetch_sources.contains(&FetchSource::Wkd) {
                     info!("Input is a valid email, try fetching from Web Key Directory");
 
@@ -438,62 +446,7 @@ async fn main() -> anyhow::Result<()> {
                 if fetch_sources.contains(&FetchSource::Github) {
                     info!("Input is a valid email, try fetching from GitHub");
 
-                    let mut author: Option<String> = async {
-                        let body = github_api(&reqwest_client, format!("https://api.github.com/search/commits?q=author-email:{}&per_page=1&page=0", fetch_options.input))?;
-
-                        trace!("GitHub API response body: {}", body);
-
-                        let json: serde_json::Value = serde_json::from_str(&body)
-                            .with_context(|| "While parsing GitHub API response as JSON")?;
-
-                        json["total_count"].as_u64().inspect(|count_str| info!("GitHub search commits for email {} authored total count: {}", fetch_options.input, count_str));
-
-                        let author = json["items"][0]["author"]["login"]
-                            .as_str()
-                            .ok_or_else(|| anyhow!("No author found for the given email"))?;
-
-                        Ok::<String, anyhow::Error>(author.to_string())
-                    }.await.or_warn("Searching Github");
-
-                    async {
-                            let body = github_api(&reqwest_client, format!("https://api.github.com/search/commits?q=committer-email:{}&per_page=1&page=0", fetch_options.input))?;
-
-                            trace!("GitHub API response body: {}", body);
-
-                            let json: serde_json::Value = serde_json::from_str(&body)
-                                .with_context(|| "While parsing GitHub API response as JSON")?;
-
-                            json["total_count"].as_u64().inspect(|count_str| info!("GitHub search commits for email {} committed total count: {}", fetch_options.input, count_str));
-
-                        if author.is_none() {
-                            author = Some(json["items"][0]["committer"]["login"]
-                                .as_str()
-                                .ok_or_else(|| anyhow!("No user found for the given email"))?.to_string());
-                        }
-
-                        Ok::<(), anyhow::Error>(())
-                        }.await.or_warn("Searching Github");
-
-                    if let Some(author) = author {
-                        info!("Found GitHub user: {}", author);
-                        async {
-                            let body = github_api(
-                                &reqwest_client,
-                                format!("https://api.github.com/users/{}/gpg_keys", author),
-                            )?;
-
-                            trace!("GitHub GPG keys response body: {}", body);
-
-                            parse_github_gpg(body)?;
-
-                            Ok::<(), anyhow::Error>(())
-                        }
-                        .await
-                        .with_context(|| {
-                            format!("While fetching GPG keys from GitHub for user: {}", author)
-                        })
-                        .or_warn("Fetching GitHub");
-                    }
+                    print_certs(fetch_cert_from_github(&reqwest_client, &fetch_options.input).await)
                 }
             } else {
                 info!(
@@ -511,7 +464,7 @@ async fn main() -> anyhow::Result<()> {
 
                     trace!("GitHub GPG keys response body: {}", body);
 
-                    parse_github_gpg(body)?;
+                    print_certs(parse_github_gpg(body));
 
                     Ok::<(), anyhow::Error>(())
                 }
@@ -528,26 +481,6 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 }
-
-fn parse_github_gpg(body: String) -> Result<(), anyhow::Error> {
-    let json: serde_json::Value = serde_json::from_str(body.as_str())
-        .with_context(|| "While parsing GitHub GPG keys response as JSON")?;
-
-    if let Some(keys) = json.as_array() {
-        let mut certs: Vec<Result<Cert, anyhow::Error>> = Vec::new();
-        for key in keys {
-            if let Some(armored_key) = key["raw_key"].as_str() {
-                let cert = Cert::from_bytes(armored_key.as_bytes())
-                    .with_context(|| "Parsing GitHub response");
-                certs.push(cert);
-            }
-        }
-        print_certs(Ok(certs));
-    }
-
-    Ok(())
-}
-
 fn print_certs(certs: Result<Vec<Result<Cert, anyhow::Error>>, anyhow::Error>) {
     match certs {
         Ok(certs) => {
@@ -563,21 +496,4 @@ fn print_certs(certs: Result<Vec<Result<Cert, anyhow::Error>>, anyhow::Error>) {
             warn!("{:#}", e);
         }
     }
-}
-
-fn github_api(reqwest_client: &reqwest::Client, url: String) -> Result<String, anyhow::Error> {
-    futures::executor::block_on(async {
-        reqwest_client
-            .get(url)
-            .header("Accept", "application/vnd.github+json")
-            .header(
-                "User-Agent",
-                format!("pgp-sig2dot-cli/{}", crate_version!()),
-            )
-            .send()
-            .await?
-            .text()
-            .await
-            .with_context(|| "While searching user email from GitHub API")
-    })
 }

@@ -53,6 +53,9 @@ pub(crate) enum OutputType {
     Metadata,
     /// OpenPGP key block format can be imported to GnuPG, etc.
     KeyBlock,
+    /// Works with https://github.com/cryolitia/map42
+    #[cfg(feature = "map42")]
+    Map42,
 }
 
 #[derive(clap::Args, Debug, Clone, Default)]
