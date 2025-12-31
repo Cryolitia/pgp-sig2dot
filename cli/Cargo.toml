@@ -15,6 +15,7 @@ path = "src/main.rs"
 
 [features]
 map42 = [ "rustworkx-core" ]
+nix = [ "rnix" ]
 
 [dependencies]
 pgp-sig2dot = { path = "../lib", version = "0.4.1" }
@@ -38,3 +39,4 @@ validator = "0.20.0"
 reqwest = "0.12.24"
 serialize_display_adapter_macro_derive = "0.2.0"
 rustworkx-core = {  version = "0.17.1", optional = true }
+rnix = { version = "0.12.0", optional = true }

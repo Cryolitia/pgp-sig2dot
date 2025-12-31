@@ -124,7 +124,10 @@
                     lockFile = ./Cargo.lock;
                   };
 
-                  buildFeatures = [ "map42" ];
+                  buildFeatures = [
+                    "map42"
+                    "nix"
+                  ];
 
                   nativeBuildInputs = [
                     pkg-config

@@ -131,6 +131,9 @@ pub(crate) enum FetchSource {
     Wkd,
     /// Fetch from GitHub
     Github,
+    /// Fetch from the nixpkgs maintainer list
+    #[cfg(feature = "nix")]
+    Nixpkgs,
     /// All
     #[default]
     All,

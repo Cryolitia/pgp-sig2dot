@@ -1,6 +1,6 @@
 use crate::helper::{SuppressErrors, SuppressResultOk, SuppressResultOkOrDefault};
 use crate::structure::{OpenPgpKey, OpenPgpSig, OpenPgpUid};
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use log::{debug, trace, warn};
 use sequoia_openpgp::packet::Signature;
 use sequoia_openpgp::policy::StandardPolicy;

@@ -1,6 +1,6 @@
 use num_enum::{FromPrimitive, IntoPrimitive};
-use sequoia_openpgp::types::SignatureType;
 use sequoia_openpgp::Cert;
+use sequoia_openpgp::types::SignatureType;
 use serde::Serialize;
 use serialize_display_adapter_macro_derive::JsonSerializeDisplayAdapter;
 use std::borrow::Borrow;

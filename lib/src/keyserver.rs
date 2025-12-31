@@ -1,28 +1,73 @@
 use crate::helper::SuppressErrors;
-use anyhow::{anyhow, Context};
-use log::{debug, info, trace};
+use anyhow::{Context, anyhow};
+use log::{debug, info, trace, warn};
 use sequoia_net::KeyServer;
-use sequoia_openpgp::{Cert, Fingerprint};
+use sequoia_openpgp::{Cert, Fingerprint, KeyHandle};
 use std::collections::{HashMap, HashSet};
 use std::default::Default;
 use std::sync::OnceLock;
 
-pub(crate) fn fetch_cert_from_keyserver(
+pub fn fetch_cert_from_keyserver(
     keyserver: &KeyServer,
-    fingerprint: &Fingerprint,
+    key_handle: KeyHandle,
 ) -> anyhow::Result<Cert> {
-    info!("Fetching key: {fingerprint}");
+    info!("Fetching key: {key_handle}");
     futures::executor::block_on(async {
         keyserver
-            .get(fingerprint)
+            .get(key_handle.clone())
             .await
             .and_then(|v| {
                 v.into_iter()
                     .next()
-                    .ok_or(anyhow!("Key {} not found on keyserver", fingerprint))?
+                    .ok_or(anyhow!("Key {} not found on keyserver", key_handle))?
             })
-            .with_context(|| format!("Failed to fetch key: {fingerprint}"))
+            .with_context(|| format!("Failed to fetch key: {key_handle}"))
     })
+}
+
+pub fn fetch_cert_from_keyservers(
+    key_servers: &[String],
+    key_handle: KeyHandle,
+) -> Vec<anyhow::Result<Cert>> {
+    key_servers
+        .iter()
+        .map(|keyserver_addr| {
+            info!("Fetching from keyserver: {keyserver_addr}");
+            let keyserver = KeyServer::new(keyserver_addr.as_str())
+                .with_context(|| format!("Failed to parse keyserver address: {keyserver_addr}"))?;
+            fetch_cert_from_keyserver(&keyserver, key_handle.clone())
+        })
+        .collect()
+}
+
+pub async fn search_cert_from_keyservers(
+    key_servers: &[String],
+    keyword: String,
+) -> Vec<anyhow::Result<Cert>> {
+    key_servers
+        .iter()
+        .fold(Vec::new(), |mut vec, keyserver_addr| {
+            info!("Fetching from keyserver: {keyserver_addr}");
+            match futures::executor::block_on(async {
+                match KeyServer::new(keyserver_addr.as_str())
+                    .with_context(|| format!("Failed to parse keyserver address: {keyserver_addr}"))
+                {
+                    Ok(keyserver) => keyserver.search(keyword.clone()).await.with_context(|| {
+                        format!("While searching by UserID from keyserver: {keyserver_addr}")
+                    }),
+                    Err(e) => Err(e),
+                }
+            }) {
+                Ok(mut results) => {
+                    vec.append(&mut results);
+                    vec
+                }
+                Err(e) => {
+                    warn!("Failed to search from keyserver {}: {}", keyserver_addr, e);
+                    vec
+                }
+            }
+        })
 }
 
 pub fn fetch_cert_from_keyserver_once_lock(
@@ -30,7 +75,7 @@ pub fn fetch_cert_from_keyserver_once_lock(
     fingerprint: &Fingerprint,
 ) -> anyhow::Result<Cert> {
     match keyserver_lock.get() {
-        Some(keyserver) => fetch_cert_from_keyserver(keyserver, fingerprint),
+        Some(keyserver) => fetch_cert_from_keyserver(keyserver, fingerprint.into()),
         None => Err(anyhow!("Keyserver is not initialized")),
     }
 }
@@ -48,7 +93,7 @@ pub(crate) fn fetch_cert_from_keyserver_recursive(
         if result.contains_key(fingerprint) {
             continue;
         }
-        fetch_cert_from_keyserver(keyserver, fingerprint)
+        fetch_cert_from_keyserver(keyserver, fingerprint.into())
             .with_context(|| format!("Gossiping key:\t{fingerprint}"))
             .map_or_warn("Failed to fetch cert from keyserver", |cert| {
                 result.insert(fingerprint.clone(), cert.clone());

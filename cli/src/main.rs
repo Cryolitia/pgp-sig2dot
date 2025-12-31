@@ -1,24 +1,28 @@
 use crate::cli::{Cli, Commands, DrawOptions, FetchSource, GenCommand, OutputType};
 #[cfg(feature = "map42")]
 use crate::map42::print_map42;
+#[cfg(feature = "nix")]
+use crate::nix::fetch_cert_from_nixpkgs;
 use crate::structure::graph_node_uid_fmt;
 use crate::structure::open_pgp_sig_fmt;
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use clap::{CommandFactory, Parser};
 use format::lazy_format;
-use log::{debug, info, trace, warn};
-use petgraph::algo::{has_path_connecting, DfsSpace};
+use log::{debug, info, warn};
+use petgraph::algo::{DfsSpace, has_path_connecting};
 use petgraph::dot::Dot;
 use petgraph::graphmap::DiGraphMap;
 use pgp_sig2dot::cert::{build_key_set, insert_or_update_cert};
 use pgp_sig2dot::get_pgp_uid_by_node_uid;
-use pgp_sig2dot::github::{fetch_cert_from_github, github_api, parse_github_gpg};
+use pgp_sig2dot::github::{fetch_cert_from_github, search_username_on_github};
+use pgp_sig2dot::helper::SuppressErrors;
 use pgp_sig2dot::helper::SuppressResultOk;
-use pgp_sig2dot::helper::{SuppressErrors, SuppressPrint, SuppressResultErrors};
+use pgp_sig2dot::helper::{SuppressPrint, SuppressResultErrors};
 use pgp_sig2dot::input::{parse_input_fingerprints, parse_key_block};
 use pgp_sig2dot::keyserver;
+use pgp_sig2dot::keyserver::{fetch_cert_from_keyservers, search_cert_from_keyservers};
 use pgp_sig2dot::structure::{GraphNodeUid, GraphNodeUidOwned, OpenPgpKey, OpenPgpSig, SigType};
-use sequoia_net::{wkd, KeyServer};
+use sequoia_net::{KeyServer, wkd};
 use sequoia_openpgp::serialize::MarshalInto;
 use sequoia_openpgp::{Cert, Fingerprint, KeyHandle};
 use std::collections::{HashMap, HashSet};
@@ -32,6 +36,8 @@ use validator::ValidateEmail;
 mod cli;
 #[cfg(feature = "map42")]
 mod map42;
+#[cfg(feature = "nix")]
+mod nix;
 mod structure;
 
 static DRAW_OPTIONS: OnceLock<DrawOptions> = OnceLock::new();
@@ -337,14 +343,12 @@ async fn main() -> anyhow::Result<()> {
                             .map(|v| if v.is_revoked { " color = red " } else { "" })
                             .unwrap_or("")
                             .to_string();
-                        if draw_options.processor.gossip.is_some() {
-                            if let Some(map) = GOSSIP_LAYER_MAP.get() {
-                                if let Some(layer) = map.get(&uid.fingerprint.to_string()) {
-                                    if *layer == 0 {
-                                        attr += " root = true ";
-                                    }
-                                }
-                            }
+                        if draw_options.processor.gossip.is_some()
+                            && let Some(map) = GOSSIP_LAYER_MAP.get()
+                            && let Some(layer) = map.get(&uid.fingerprint.to_string())
+                            && *layer == 0
+                        {
+                            attr += " root = true ";
                         }
                         attr
                     };
@@ -381,7 +385,7 @@ async fn main() -> anyhow::Result<()> {
                         .collect::<HashMap<String, Arc<Cert>>>()
                         .values()
                         .map(|cert| Ok(cert.as_ref().clone()))
-                        .collect::<Vec<Result<Cert, anyhow::Error>>>();
+                        .collect::<Vec<anyhow::Result<Cert>>>();
                     print_certs(Ok(certs));
                 }
                 #[cfg(feature = "map42")]
@@ -398,6 +402,8 @@ async fn main() -> anyhow::Result<()> {
                     FetchSource::Github,
                     FetchSource::KeyServer,
                     FetchSource::Wkd,
+                    #[cfg(feature = "nix")]
+                    FetchSource::Nixpkgs,
                 ]
                 .into_iter()
                 .collect();
@@ -410,20 +416,16 @@ async fn main() -> anyhow::Result<()> {
                     .parse()
                     .or_warn("Parsing key handle failed");
 
-                for keyserver_addr in fetch_options.keyserver.iter() {
-                    info!("Fetching from keyserver: {keyserver_addr}");
-                    KeyServer::new(keyserver_addr).with_context(|| format!("While creating keyserver with address: {keyserver_addr}")).ok_or_warn("Fetch", |keyserver: KeyServer| {
-                        futures::executor::block_on(async {
-                            let result = if let Some(key_handle) = key_handle.clone() {
-                                keyserver.get(key_handle).await.with_context(|| format!("While fetching by KeyHandle from keyserver: {keyserver_addr}"))
-                            } else {
-                                keyserver.search(fetch_options.input.clone()).await.with_context(|| format!("While searching by UserID from keyserver: {keyserver_addr}"))
-                            };
-                            print_certs(result);
-                            Ok::<(), anyhow::Error>(())
-                        })
-                    });
-                }
+                let certs = if let Some(key_handle) = key_handle.clone() {
+                    fetch_cert_from_keyservers(&fetch_options.keyserver, key_handle)
+                } else {
+                    search_cert_from_keyservers(
+                        &fetch_options.keyserver,
+                        fetch_options.input.clone(),
+                    )
+                    .await
+                };
+                print_certs(Ok(certs));
             }
 
             let reqwest_client = reqwest::Client::new();
@@ -448,40 +450,29 @@ async fn main() -> anyhow::Result<()> {
 
                     print_certs(fetch_cert_from_github(&reqwest_client, &fetch_options.input).await)
                 }
-            } else {
-                info!(
-                    "Input is not a valid email, skip fetching from Web Key Directory, try searching from GitHub by username"
-                );
+            } else if fetch_sources.contains(&FetchSource::Github) {
+                info!("Input is not a valid email, try searching from GitHub by username");
 
-                async {
-                    let body = github_api(
-                        &reqwest_client,
-                        format!(
-                            "https://api.github.com/users/{}/gpg_keys",
-                            fetch_options.input
-                        ),
-                    )?;
-
-                    trace!("GitHub GPG keys response body: {}", body);
-
-                    print_certs(parse_github_gpg(body));
-
-                    Ok::<(), anyhow::Error>(())
-                }
-                .await
-                .with_context(|| {
-                    format!(
-                        "While fetching GPG keys from GitHub for user: {}",
-                        fetch_options.input
-                    )
-                })
-                .or_warn("Fetching GitHub");
+                let certs = search_username_on_github(&reqwest_client, fetch_options.input.clone());
+                print_certs(certs.await);
             }
+
+            #[cfg(feature = "nix")]
+            if fetch_sources.contains(&FetchSource::Nixpkgs) {
+                let certs = fetch_cert_from_nixpkgs(
+                    &reqwest_client,
+                    fetch_options.input,
+                    &fetch_options.keyserver,
+                )
+                .await;
+                print_certs(certs);
+            }
+
             Ok(())
         }
     }
 }
-fn print_certs(certs: Result<Vec<Result<Cert, anyhow::Error>>, anyhow::Error>) {
+fn print_certs(certs: anyhow::Result<Vec<anyhow::Result<Cert>>>) {
     match certs {
         Ok(certs) => {
             for cert in certs {

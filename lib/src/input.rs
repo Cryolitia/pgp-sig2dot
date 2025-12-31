@@ -1,5 +1,5 @@
 use crate::helper::SuppressResultOk;
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use sequoia_openpgp::cert::CertParser;
 use sequoia_openpgp::parse::Parse;
 use sequoia_openpgp::{Cert, Fingerprint};

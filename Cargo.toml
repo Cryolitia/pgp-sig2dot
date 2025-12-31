@@ -7,7 +7,7 @@ members = [
 ]
 
 [workspace.package]
-edition = "2021"
+edition = "2024"
 version = "0.4.1"
 description = "OpenPGP sign party tool —— Visualize the Web of Trust"
 homepage = "https://github.com/Cryolitia/pgp-sig2dot"
