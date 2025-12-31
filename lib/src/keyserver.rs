@@ -53,7 +53,7 @@ pub async fn search_cert_from_keyservers(
                     .with_context(|| format!("Failed to parse keyserver address: {keyserver_addr}"))
                 {
                     Ok(keyserver) => keyserver.search(keyword.clone()).await.with_context(|| {
-                        format!("While searching by UserID from keyserver: {keyserver_addr}")
+                        format!("While searching from keyserver: {keyserver_addr}")
                     }),
                     Err(e) => Err(e),
                 }
