@@ -2498,7 +2498,7 @@ dependencies = [
 
 [[package]]
 name = "pgp-sig2dot"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -2516,7 +2516,7 @@ dependencies = [
 
 [[package]]
 name = "pgp-sig2dot-cli"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "clap",
