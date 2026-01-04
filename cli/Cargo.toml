@@ -18,7 +18,7 @@ map42 = [ "rustworkx-core" ]
 nix = [ "rnix" ]
 
 [dependencies]
-pgp-sig2dot = { path = "../lib", version = "0.4.2" }
+pgp-sig2dot = { path = "../lib", version = "0.4.0" }
 anyhow = { version = "1.0.86", features = ["backtrace"] }
 clap = { version = "4.5.15", features = ["derive", "cargo"] }
 clap-verbosity-flag = "3.0.2"
