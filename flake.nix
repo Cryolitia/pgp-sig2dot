@@ -12,16 +12,11 @@
   };
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
-    rust-overlay = {
-      url = "github:oxalica/rust-overlay";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
   };
   outputs =
     {
       self,
       nixpkgs,
-      rust-overlay,
     }:
     let
       systems = [
@@ -47,7 +42,6 @@
                 cudaSupport = false;
               };
               inherit system;
-              overlays = [ (import rust-overlay) ];
             };
             rust = (pkgs.rust-bin.stable.latest.rust.override { extensions = [ "rust-src" ]; });
           in
