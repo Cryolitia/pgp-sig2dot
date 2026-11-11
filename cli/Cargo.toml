@@ -18,25 +18,25 @@ map42 = [ "rustworkx-core" ]
 nix = [ "rnix" ]
 
 [dependencies]
-pgp-sig2dot = { path = "../lib", version = "0.4.0" }
-anyhow = { version = "1.0.86", features = ["backtrace"] }
-clap = { version = "4.5.15", features = ["derive", "cargo"] }
-clap-verbosity-flag = "3.0.2"
-clap_complete = "4.5.14"
-clap_mangen = "0.2.23"
+pgp-sig2dot = { path = "../lib", version = "0.4.4" }
+anyhow = { version = "1.0.104", features = ["backtrace"] }
+clap = { version = "4.6.7", features = ["derive", "cargo"] }
+clap-verbosity-flag = "3.0.4"
+clap_complete = "4.6.11"
+clap_mangen = "0.3.3"
 clio = { version = "0.3.5", features = ["clap-parse", "curl", "http-curl"] }
-env_logger = "0.11.5"
-log = "0.4.22"
-petgraph = { version = "0.8.2", features = ["rayon", "graphmap"], default-features = false }
-serde = { version = "1.0.206", features = ["derive", "rc"] }
-serde_json = "1.0.124"
-tokio = "1.39.2"
-sequoia-openpgp = { version = "2.1.0", default-features = false }
-sequoia-net = "0.30.0"
+env_logger = "0.11.11"
+log = "0.4.35"
+petgraph = { version = "0.8.3", features = ["rayon", "graphmap"], default-features = false }
+serde = { version = "1.0.229", features = ["derive", "rc"] }
+serde_json = "1.0.154"
+tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread"] }
+sequoia-openpgp = { version = "2.4.2", default-features = false }
+sequoia-net = "0.31.0"
 format = "0.2.4"
-futures = "0.3.31"
-validator = "0.20.0"
-reqwest = "0.12.24"
+futures = "0.3.34"
+validator = "0.21.0"
+reqwest = "0.13.5"
 serialize_display_adapter_macro_derive = "0.2.0"
-rustworkx-core = {  version = "0.17.1", optional = true }
-rnix = { version = "0.12.0", optional = true }
+rustworkx-core = {  version = "0.18.1", optional = true }
+rnix = { version = "0.15.1", optional = true }

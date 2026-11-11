@@ -434,7 +434,7 @@ async fn main() -> anyhow::Result<()> {
                 if fetch_sources.contains(&FetchSource::Wkd) {
                     info!("Input is a valid email, try fetching from Web Key Directory");
 
-                    let certs = wkd::get(&reqwest_client, fetch_options.input.clone())
+                    let certs = wkd::get_with_client(&reqwest_client, fetch_options.input.clone())
                         .await
                         .with_context(|| {
                             format!(

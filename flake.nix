@@ -26,7 +26,6 @@
         "armv6l-linux"
         "armv7l-linux"
 
-        "x86_64-darwin"
         "aarch64-darwin"
       ];
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f system);
@@ -43,7 +42,7 @@
               };
               inherit system;
             };
-            rust = (pkgs.rust-bin.stable.latest.rust.override { extensions = [ "rust-src" ]; });
+            rust = pkgs.rustc;
           in
           {
             default = (
@@ -51,6 +50,9 @@
                 buildInputs =
                   (with pkgs; [
                     rust
+                    cargo
+                    clippy
+                    rustfmt
                     pkg-config
                     nettle
                     openssl
@@ -59,7 +61,7 @@
                   ]);
 
                 LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
-                RUST_SRC_PATH = "${rust}/lib/rustlib/src/rust";
+                RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";
                 LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [ pkgs.stdenv.cc.cc ];
 
                 shellHook = ''
@@ -133,7 +135,7 @@
                     openssl
                     nettle
                     sqlite
-                  ] ++ lib.optionals stdenv.isDarwin [ curl ];
+                  ] ++ lib.optionals stdenv.hostPlatform.isDarwin [ curl ];
 
                   postInstall = lib.optionalString (stdenv.buildPlatform.canExecute stdenv.hostPlatform) ''
                     installShellCompletion --cmd pgp-sig2dot \
